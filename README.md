@@ -25,12 +25,12 @@ Assets/CPS_IC_PBL_2026/Scripts/Student/
 
 각 문서의 역할은 다음과 같다.
 
-| 문서 | 용도 |
-| --- | --- |
-| `CPS_2026_TaskOverview.md` | 전체 과제 목표, 환경, API, 금지사항, 평가 기준 |
-| `CPS_2026_RoleSlice.md` | 4인 Slice 역할 분배, 공통 schema, Slice 간 호출 흐름 |
-| `WorkDirectory.md` | Slice별 작업 디렉터리와 생성해야 할 코드 파일 목록 |
-| `Student/*/README.md` | 각 디렉터리에서 실제로 구현해야 할 작업 가이드 |
+| 문서                       | 용도                                                 |
+| -------------------------- | ---------------------------------------------------- |
+| `CPS_2026_TaskOverview.md` | 전체 과제 목표, 환경, API, 금지사항, 평가 기준       |
+| `CPS_2026_RoleSlice.md`    | 4인 Slice 역할 분배, 공통 schema, Slice 간 호출 흐름 |
+| `WorkDirectory.md`         | Slice별 작업 디렉터리와 생성해야 할 코드 파일 목록   |
+| `Student/*/README.md`      | 각 디렉터리에서 실제로 구현해야 할 작업 가이드       |
 
 ---
 
@@ -47,12 +47,12 @@ feat/slice-D
 
 담당별 브랜치와 작업 범위는 다음과 같다.
 
-| 담당 Slice | 브랜치 | 작업 디렉터리 |
-| --- | --- | --- |
-| Slice A | `feat/slice-A` | `Student/Common/`, `Student/Fleet/` |
-| Slice B | `feat/slice-B` | `Student/Robot/` |
-| Slice C | `feat/slice-C` | `Student/Pose/` |
-| Slice D | `feat/slice-D` | `Student/Bootstrap/`, `Student/Vision/`, `Student/Safety/`, `Student/Telemetry/` |
+| 담당 Slice | 브랜치         | 작업 디렉터리                                                                    |
+| ---------- | -------------- | -------------------------------------------------------------------------------- |
+| Slice A    | `feat/slice-A` | `Student/Common/`, `Student/Fleet/`                                              |
+| Slice B    | `feat/slice-B` | `Student/Robot/`                                                                 |
+| Slice C    | `feat/slice-C` | `Student/Pose/`                                                                  |
+| Slice D    | `feat/slice-D` | `Student/Bootstrap/`, `Student/Vision/`, `Student/Safety/`, `Student/Telemetry/` |
 
 브랜치 생성 예시는 다음과 같다.
 
@@ -62,7 +62,10 @@ git checkout -b feat/slice-A
 
 작업 원칙:
 
+- `main` 브랜치에서 직접 작업하지 않는다.
 - 각자 자신의 Slice 브랜치에서 작업한다.
+- 작업이 끝나면 PR을 열어 `main`에 merge한다.
+- PR을 열기 전 Unity compile error와 자신이 맡은 README의 완료 기준을 확인한다.
 - 다른 Slice 디렉터리는 가능한 한 수정하지 않는다.
 - `Common` schema는 전체 Slice가 의존하므로 먼저 합의하고 반영한다.
 - Unity scene 파일은 충돌이 잦으므로 Bootstrap/scene reference 담당자 또는 팀장이 관리한다.
@@ -150,12 +153,12 @@ agent 없이 직접 작업할 때도 문서 읽는 순서는 같다.
 
 ### 역할별 읽을 README
 
-| 담당 Slice | 읽을 README |
-| --- | --- |
-| Slice A | `Student/Common/README.md`, `Student/Fleet/README.md` |
-| Slice B | `Student/Robot/README.md` |
-| Slice C | `Student/Pose/README.md` |
-| Slice D | `Student/Bootstrap/README.md`, `Student/Vision/README.md`, `Student/Safety/README.md`, `Student/Telemetry/README.md` |
+| 담당 Slice | 읽을 README                                                                                                          |
+| ---------- | -------------------------------------------------------------------------------------------------------------------- |
+| Slice A    | `Student/Common/README.md`, `Student/Fleet/README.md`                                                                |
+| Slice B    | `Student/Robot/README.md`                                                                                            |
+| Slice C    | `Student/Pose/README.md`                                                                                             |
+| Slice D    | `Student/Bootstrap/README.md`, `Student/Vision/README.md`, `Student/Safety/README.md`, `Student/Telemetry/README.md` |
 
 ### 직접 구현 시 주의사항
 
@@ -225,3 +228,8 @@ ReserveNextSlot()
 - [ ] 같은 conveyor/box/central/arm zone 중복 점유 방지
 - [ ] 180초 전체 시뮬레이션 반복 테스트
 - [ ] 빌드, 시연 영상, 보고서, 발표자료 준비
+
+---
+
+제가 유니티 프로젝트는 처음이라, 실수한 부분이 있을 수 있습니다.  
+문서나 구조에서 이상한 부분이 보이면 언제든 알려주세요!!
