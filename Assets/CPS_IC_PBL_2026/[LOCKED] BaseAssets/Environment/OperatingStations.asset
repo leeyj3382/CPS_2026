@@ -1,0 +1,75 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: e11fc8a1f0513424e9aefaea283189c3, type: 3}
+  m_Name: OperatingStations
+  m_EditorClassIdentifier: 
+  stations:
+  - Id: 1
+    Name: Conveyor_1
+    BasePosition: {x: -8, y: 0, z: -7}
+    BaseYawDeg: -90
+    ArmAnchorPoint: {x: -9.5, y: 1.5, z: -7.6}
+  - Id: 2
+    Name: Conveyor_2
+    BasePosition: {x: -8, y: 0, z: -3}
+    BaseYawDeg: -90
+    ArmAnchorPoint: {x: -9.5, y: 1.5, z: -3.6}
+  - Id: 3
+    Name: Conveyor_3
+    BasePosition: {x: -8, y: 0, z: 1}
+    BaseYawDeg: -90
+    ArmAnchorPoint: {x: -9.5, y: 1.5, z: 0.4}
+  - Id: 4
+    Name: Conveyor_4
+    BasePosition: {x: -8, y: 0, z: 5}
+    BaseYawDeg: -90
+    ArmAnchorPoint: {x: -9.5, y: 1.5, z: 4.4}
+  - Id: 5
+    Name: Conveyor_5
+    BasePosition: {x: -8, y: 0, z: 9}
+    BaseYawDeg: -90
+    ArmAnchorPoint: {x: -9.5, y: 1.5, z: 8.4}
+  - Id: 6
+    Name: Conveyor_6
+    BasePosition: {x: -6.5, y: 0, z: 10.5}
+    BaseYawDeg: 0
+    ArmAnchorPoint: {x: -7.1, y: 1.5, z: 12}
+  - Id: 7
+    Name: Conveyor_7
+    BasePosition: {x: -2.5, y: 0, z: 10.5}
+    BaseYawDeg: 0
+    ArmAnchorPoint: {x: -3.1, y: 1.5, z: 12}
+  - Id: 8
+    Name: Conveyor_8
+    BasePosition: {x: 1.5, y: 0, z: 10.5}
+    BaseYawDeg: 0
+    ArmAnchorPoint: {x: 0.9, y: 1.5, z: 12}
+  - Id: 9
+    Name: Conveyor_9
+    BasePosition: {x: 5.5, y: 0, z: 10.5}
+    BaseYawDeg: 0
+    ArmAnchorPoint: {x: 4.9, y: 1.5, z: 12}
+  - Id: 10
+    Name: Conveyor_10
+    BasePosition: {x: 9.5, y: 0, z: 10.5}
+    BaseYawDeg: 0
+    ArmAnchorPoint: {x: 8.9, y: 1.5, z: 12}
+  - Id: 100
+    Name: Normal_Box
+    BasePosition: {x: 0, y: 0, z: -6}
+    BaseYawDeg: 180
+    ArmAnchorPoint: {x: 0, y: 0.5, z: -8}
+  - Id: 101
+    Name: Abnormal_Box
+    BasePosition: {x: 8.5, y: 0, z: 2.5}
+    BaseYawDeg: 90
+    ArmAnchorPoint: {x: 10.5, y: 0.5, z: 2.5}
