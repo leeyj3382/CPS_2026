@@ -97,7 +97,7 @@ Assets/CPS_IC_PBL_2026/Scripts/Student/Pose/Palletizer.cs
 
 - 컨베이어 1~10 pick pose 제공
 - Normal Box, Abnormal Box base pose 제공
-- `ReserveNextSlot()`, `CommitSlot()`, `ReleaseSlot()` 구현
+- `ReserveNextSlot(BoxType boxType, int robotId, int taskId)`, `CommitSlot()`, `ReleaseSlot()` 구현
 - `GetBoxOccupancy()`와 자체 slot index 비교로 적재 상태 검증
 - place 실패 시 slot 예약 되돌리기
 - 박스 안에 안정적으로 놓이도록 slot 좌표 보정
