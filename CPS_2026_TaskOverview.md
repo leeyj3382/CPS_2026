@@ -166,9 +166,11 @@ void MoveArmTo(Vector3 worldPos, Quaternion worldRot, float duration = 1.0f, Act
 
 주의할 점:
 
+- `RobotId`는 레포 기준 `0 = RobotA`, `1 = RobotB`로 사용한다.
 - `IRobotController`는 **low-level 이동 API 중심**이다.
 - Pick, Grip, 색상 검사, Box slot 계산은 별도 학생 코드에서 조합해야 한다.
 - `MoveArmTo()`의 `worldRot`은 레포 코드상 down-facing IK가 강제되어 무시될 수 있다. 따라서 팔 회전보다 **목표 world position 캘리브레이션**이 중요하다.
+- 베이스 이동과 팔 이동을 동시에 호출하지 않는다. `IsBusy == true`인 동안 추가 이동 명령은 무시될 수 있으므로, `IsBusy == false`를 확인한 뒤 다음 명령을 보낸다.
 
 ### 5.2 환경 정보 API: `IEnvironmentInfo`
 
@@ -196,6 +198,7 @@ float NextProductionAt(int conveyorId);
 - 품질 정보는 환경 API로 직접 제공되지 않는다.
 - Normal/Abnormal 판정은 ColorSensor/ColorArea 기반으로 처리한다.
 - `NextProductionAt()`은 스케줄링 보조 정보로 사용하되, 실제 큐 길이 polling을 우선 신뢰한다.
+- 현재 레포 구현에서는 `NextProductionAt()`이 `-1`을 반환할 수 있다. 이 경우 컨베이어 생산 주기 상수와 `GetQueueLength()` polling을 기준으로 스케줄링한다.
 
 ### 5.3 Operating Station ID
 
@@ -234,11 +237,14 @@ float NextProductionAt(int conveyorId);
 핵심 사용 방식:
 
 ```csharp
+Color sensed = colorSensor.area.color;
+// 또는 ColorArea를 직접 연결한 경우:
 Color sensed = colorArea.color;
 ```
 
 주의할 점:
 
+- 학생은 `ColorSensor` 또는 `ColorArea`를 `[SerializeField]`로 연결할 수 있다. 실제 색상값의 출처는 `ColorArea.color`다.
 - 감지 대상이 없으면 `defaultColor`가 나올 수 있다.
 - 물품이 센서 영역에 들어오도록 로봇 팔/센서 위치를 맞춰야 한다.
 - 색상이 애매하거나 defaultColor면 재검사한다.
@@ -255,6 +261,7 @@ Color sensed = colorArea.color;
 | `IsHolding` | 현재 물체를 들고 있는지 여부 |
 | `IsGraspReady` | 현재 grip 가능한 상태인지 여부 |
 | `CurrentCandidate` | 현재 후보 물체 |
+| `CanGrip(out reason)` | grip 가능 여부와 실패 사유 확인 |
 
 그리퍼는 단순히 `TryGrip()`을 호출한다고 무조건 성공하지 않는다. 다음 조건이 중요하다.
 
@@ -264,6 +271,7 @@ Color sensed = colorArea.color;
 - 상대 속도가 너무 빠르면 실패할 수 있음
 - attachPoint와 후보 물체의 거리가 너무 멀면 실패할 수 있음
 - 이미 물체를 들고 있으면 실패함
+- 실패 원인은 `CanGrip(out reason)`으로 확인해 pose 보정에 활용한다.
 
 따라서 Pick 시퀀스에는 반드시 다음이 포함되어야 한다.
 
@@ -276,6 +284,25 @@ approach pose 이동
 → IsHolding 확인
 → 실패 시 1~2회 재시도
 ```
+
+### 5.6 박스 컴포넌트: `BoxTrigger`
+
+박스에는 `BoxTrigger`가 붙어 있으며, 박스 내부 slot 점유 상태를 직접 추적할 때 참조할 수 있다.
+
+| API | 용도 |
+|---|---|
+| `SlotCount` | 박스가 관리하는 slot 개수 |
+| `OccupiedSlotCount` | 등록된 점유 slot 개수 |
+| `RegisterSlotPlacement(slotIndex)` | 특정 slot 점유 등록 |
+| `IsSlotOccupied(slotIndex)` | 특정 slot 점유 여부 확인 |
+| `ClearSlotPlacement(slotIndex)` | 디버그/재시작용 slot 점유 해제 |
+
+주의할 점:
+
+- 물품이 물리적으로 박스 trigger 안에 들어가는 것과 `OccupiedSlotCount`는 같은 의미가 아니다.
+- `IEnvironmentInfo.GetBoxOccupancy(BoxType box)`는 현재 레포에서 `BoxTrigger.OccupiedSlotCount`를 반환한다.
+- 따라서 `GetBoxOccupancy()`를 slot 검증에 쓰려면 `Palletizer`가 place 성공 시 `RegisterSlotPlacement(slotIndex)` 또는 자체 slot 상태를 일관되게 관리해야 한다.
+- 현재 로컬 레포에서는 `PalletGrid` API가 확인되지 않으므로, box 내부 grid slot 좌표는 학생 코드에서 직접 계산하거나 `BoxTrigger`의 slot 점유 API와 함께 관리한다.
 
 ---
 
@@ -380,7 +407,7 @@ Idle
 - `GoToOperatingStation()` 호출
 - `MoveArmTo()` 호출
 - `SuctionGripper.TryGrip()` / `Release()` 호출
-- `ColorArea.color` 기반 검사 요청
+- `ColorSensor.area.color` 또는 `ColorArea.color` 기반 검사 요청
 - 작업 성공/실패 이벤트를 FleetManager에 전달
 - 실패 시 재시도 또는 작업 포기 처리
 - timeout 발생 시 안전 상태로 복귀
@@ -485,7 +512,7 @@ ColorSensor/ColorArea 결과를 Normal/Abnormal로 변환한다.
 
 - 각 로봇의 ColorSensor/ColorArea 참조 연결
 - 물품이 센서 영역에 들어오도록 검사 pose 조정
-- `ColorArea.color` 값 읽기
+- `ColorSensor.area.color` 또는 `ColorArea.color` 값 읽기
 - `#3140DD`와 `#E03636`에 대한 색상 거리 계산
 - 가까운 쪽으로 Normal/Abnormal 판정
 - defaultColor 또는 애매한 값이면 재검사
@@ -613,6 +640,7 @@ Normal/Abnormal 박스 안에 물품을 안정적으로 정렬 배치한다.
 - 제품 길이 절반 이하 높이에서 내려놓기
 - 자유낙하 없이 낮은 위치에서 `Release()`
 - `GetBoxOccupancy()`와 자체 slot index가 크게 어긋나지 않는지 확인
+- 현재 로컬 레포에 `PalletGrid`가 없으면 자체 grid 좌표 계산을 사용
 
 #### 단순 slot 구조 예시
 
@@ -773,7 +801,7 @@ Abnormal Box:
 #### 주요 책임
 
 - RobotA/B의 ColorSensor/ColorArea 참조 연결
-- `ColorArea.color` 읽기
+- `ColorSensor.area.color` 또는 `ColorArea.color` 읽기
 - Normal/Abnormal 색상 거리 기반 분류
 - defaultColor 또는 애매한 색상 재검사
 - `RealProduct.isNormal` 직접 접근 없이 분류
@@ -915,7 +943,7 @@ Abnormal Box:
 
 ### P5. 색상 검사 및 분류
 
-- ColorArea가 물품 색상을 읽는지 확인
+- ColorSensor/ColorArea가 물품 색상을 읽는지 확인
 - Normal/Abnormal 판정 함수 구현
 - defaultColor 재검사 처리
 - Normal Box / Abnormal Box 분기 이동
@@ -976,13 +1004,13 @@ Abnormal Box:
 ```text
 1. Unity 프로젝트 정상 실행
 2. Student 폴더에 FleetManager 테스트 스크립트 생성
-3. RobotA/B, EnvironmentInfo, ColorArea, SuctionGripper 참조 연결
+3. RobotA/B, EnvironmentInfo, ColorSensor/ColorArea, SuctionGripper 참조 연결
 4. 1~10번 queue length 콘솔 출력
 5. RobotA를 1번 컨베이어 station으로 이동
 6. RobotA 팔을 approach/pick/retract pose로 이동
 7. SuctionGripper로 물품 1개 grip 성공
 8. Normal Box로 이동 후 낮은 높이에서 release
-9. ColorArea.color 기반 색상 검사 추가
+9. ColorSensor/ColorArea 기반 색상 검사 추가
 10. Normal/Abnormal box 분기 이동
 11. RobotB에도 동일 미션 적용
 12. TaskAllocator로 자동 작업 선택
@@ -1073,7 +1101,7 @@ Abnormal Box:
 - [ ] `GetQueueLength(1~10)`로 큐 상태를 읽는다.
 - [ ] queue가 있는 컨베이어를 자동 선택한다.
 - [ ] 물품을 1개씩 집는다.
-- [ ] `ColorArea.color` 기반으로 Normal/Abnormal을 분류한다.
+- [ ] `ColorSensor.area.color` 또는 `ColorArea.color` 기반으로 Normal/Abnormal을 분류한다.
 - [ ] Normal은 Normal Box에 넣는다.
 - [ ] Abnormal은 Abnormal Box에 넣는다.
 - [ ] 두 로봇이 같은 컨베이어를 중복 처리하지 않는다.
@@ -1167,7 +1195,7 @@ Abnormal Box:
 
 ### 14.4 Vision / Classification 테스트
 
-- [ ] ColorArea가 물품 색상을 읽는다.
+- [ ] ColorSensor/ColorArea가 물품 색상을 읽는다.
 - [ ] 감지 대상이 없을 때 defaultColor가 나오는지 확인했다.
 - [ ] 파란색 물품이 Normal로 분류된다.
 - [ ] 빨간색 물품이 Abnormal로 분류된다.
@@ -1256,7 +1284,7 @@ Queue 감시
 → Pick pose 접근
 → Gripper 접촉 조건 확인
 → 물품 Grip
-→ ColorArea 기반 색상 검사
+→ ColorSensor/ColorArea 기반 색상 검사
 → Normal/Abnormal 분류
 → Box 이동
 → Palletizer slot 계산

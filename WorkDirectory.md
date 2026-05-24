@@ -134,7 +134,7 @@ Assets/CPS_IC_PBL_2026/Scripts/Student/Telemetry/TelemetryLogger.cs
 
 ### 핵심 작업
 
-- `ColorArea.color` 기반 Normal/Abnormal 분류
+- `ColorSensor.area.color` 또는 `ColorArea.color` 기반 Normal/Abnormal 분류
 - Conveyor, NormalBox, AbnormalBox, CentralZone, RobotArmZone lock 관리
 - 중앙 구역 이동 정책과 deadlock timeout 처리
 - task, lock, grip, classification, mission result 로그 기록

@@ -28,6 +28,7 @@ Palletizer.cs
 - Robot에서 전달하는 `ProductClass`
 - Robot에서 전달하는 robot id, task id
 - 가능하면 Bootstrap에서 연결된 `IEnvironmentInfo.GetBoxOccupancy(BoxType box)`
+- 선택적으로 Bootstrap에서 연결된 Normal/Abnormal `BoxTrigger`
 
 ## 출력
 
@@ -50,7 +51,10 @@ Palletizer.cs
 - `ReserveNextSlot(productClass, robotId, taskId)`는 같은 slot 중복 사용을 막아야 한다.
 - place 성공 시 `CommitSlot(taskId)`로 확정한다.
 - place 실패 또는 mission 실패 시 `ReleaseSlot(taskId)`로 예약을 되돌린다.
+- `BoxTrigger`를 직접 참조하는 경우 `IsSlotOccupied(slotIndex)`로 중복 여부를 확인하고, place 성공 후 `RegisterSlotPlacement(slotIndex)`로 점유를 등록할 수 있다.
 - `GetBoxOccupancy()`와 자체 slot index를 비교해 크게 어긋나면 로그로 남긴다.
+- `GetBoxOccupancy()`는 현재 레포에서 `BoxTrigger.OccupiedSlotCount`를 반환하므로, slot 등록을 하지 않으면 자체 slot index와 값이 다를 수 있다.
+- 현재 로컬 레포에서는 `PalletGrid` API가 확인되지 않으므로, box 내부 grid slot 좌표는 이 디렉터리에서 직접 계산한다.
 - occupancy 검증은 slot 좌표 계산을 대체하지 않고, 누락/이탈/commit 오류를 찾는 보조 검증으로 사용한다.
 
 ## 구현 순서

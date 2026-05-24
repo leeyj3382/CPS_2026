@@ -57,6 +57,8 @@ TaskAllocator.cs
 - 로봇과 너무 먼 conveyor는 distance cost로 감점
 - 오래 처리되지 않은 conveyor는 waiting score로 보정
 
+주의: 현재 레포 구현에서 `NextProductionAt()`은 `-1`을 반환할 수 있다. 이 경우 생산 주기 상수와 `GetQueueLength()` polling을 기준으로 우선순위를 계산한다.
+
 ## 다른 슬라이스와의 연결
 
 - Common의 `WorkTask`, `MissionRequest`, `MissionResult`, `ConveyorSnapshot`, `RobotSnapshot` 사용

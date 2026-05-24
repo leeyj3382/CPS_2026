@@ -24,11 +24,12 @@ StudentConstants.cs
 - `StudentEnums.cs`: `ProductClass`, `RobotRuntimeState`, `TaskStatus`, `LockResourceType`, `MissionFailureReason` 정의
 - `StudentSchemas.cs`: `ConveyorSnapshot`, `RobotSnapshot`, `WorkTask`, `MissionRequest`, `MissionResult`, `StationPose`, `BoxSlotPose`, `ColorClassificationResult`, `ResourceKey`, `ResourceLockToken` 정의
 - `StudentInterfaces.cs`: `IRobotAgent`, `ITaskAllocator`, `IPoseProvider`, `IPalletizer`, `IColorClassifier`, `IResourceLockManager`, `IPathPlanner`, `ITelemetryLogger` 정의
-- `StudentConstants.cs`: station id, conveyor id 범위, box station id, conveyor 생산 주기, timeout 기본값 같은 공통 상수 정의
+- `StudentConstants.cs`: station id, robot id, conveyor id 범위, box station id, conveyor 생산 주기, timeout 기본값, 색상 기준값 같은 공통 상수 정의
 
 ## 반드시 맞출 스키마
 
 - Station ID: Conveyor `1~10`, Normal Box `100`, Abnormal Box `101`
+- Robot ID: RobotA `0`, RobotB `1`
 - `StationPose`: `approachPos`, `actionPos`, `retractPos` 사용
 - `BoxSlotPose`: `approachPos`, `placePos`, `retractPos` 사용
 - `ResourceKey`: dictionary key로 쓰이므로 `struct` 형태와 equality/hash 구현 유지

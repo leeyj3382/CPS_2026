@@ -22,14 +22,14 @@ GripperAdapter.cs
 
 - `RobotAgent.cs`: `IRobotAgent` 구현, robot id/state/can accept task 관리, `StartMission()` 진입점 제공
 - `MissionExecutor.cs`: 컨베이어 이동, pick, grip, 색상 검사, box 이동, palletizer slot place, 실패 처리 실행
-- `GripperAdapter.cs`: `SuctionGripper`의 `IsGraspReady`, `CurrentCandidate`, `TryGrip()`, `IsHolding`, `Release()` 호출을 안정적으로 감쌈
+- `GripperAdapter.cs`: `SuctionGripper`의 `IsGraspReady`, `CurrentCandidate`, `CanGrip(out reason)`, `TryGrip()`, `IsHolding`, `Release()` 호출을 안정적으로 감쌈
 
 ## 입력
 
 - Fleet에서 전달하는 `MissionRequest`
 - Bootstrap에서 연결한 robot별 `IRobotController`
 - robot별 `SuctionGripper`
-- robot별 `ColorArea`
+- robot별 `ColorSensor` 또는 `ColorArea`
 - Pose의 `IPoseProvider`, `IPalletizer`
 - Vision의 `IColorClassifier`
 - Safety의 `IResourceLockManager`, `IPathPlanner`
@@ -47,17 +47,20 @@ GripperAdapter.cs
 2. `IPathPlanner`로 CentralZone lock 필요 여부를 확인한다.
 3. 필요한 lock을 정해진 순서로 획득한다.
 4. `IRobotController.GoToOperatingStation(conveyorId)`로 이동한다.
-5. `IPoseProvider.GetConveyorPickPose(conveyorId)`에서 pick pose를 받는다.
-6. `approachPos → actionPos → retractPos` 순서로 arm을 움직인다.
-7. `GripperAdapter`로 grasp ready를 기다리고 `TryGrip()`을 수행한다.
-8. `IsHolding`으로 grip 성공 여부를 확인한다.
-9. `ColorArea.color`를 읽어 `IColorClassifier.Classify()`에 전달한다.
-10. Normal이면 station `100`, Abnormal이면 station `101`로 목적지를 정한다.
-11. box lock을 얻고 `GoToOperatingStation(100 또는 101)`로 이동한다.
-12. `IPalletizer.ReserveNextSlot()`으로 place slot을 예약한다.
-13. slot의 `approachPos → placePos → retractPos` 순서로 arm을 움직인다.
-14. `Release()` 후 place 성공이면 `CommitSlot(taskId)`를 호출한다.
-15. 모든 lock을 해제하고 성공 `MissionResult`를 반환한다.
+5. `IsBusy == false`가 될 때까지 기다린다.
+6. `IPoseProvider.GetConveyorPickPose(conveyorId)`에서 pick pose를 받는다.
+7. `approachPos → actionPos → retractPos` 순서로 arm을 움직이되, 각 `MoveArmTo()` 뒤에는 `IsBusy == false`를 확인한다.
+8. `GripperAdapter`로 grasp ready를 기다리고 `TryGrip()`을 수행한다.
+9. 실패 시 `CanGrip(out reason)`의 reason을 telemetry에 남긴다.
+10. `IsHolding`으로 grip 성공 여부를 확인한다.
+11. `ColorSensor.area.color` 또는 `ColorArea.color`를 읽어 `IColorClassifier.Classify()`에 전달한다.
+12. Normal이면 station `100`, Abnormal이면 station `101`로 목적지를 정한다.
+13. box lock을 얻고 `GoToOperatingStation(100 또는 101)`로 이동한다.
+14. `IsBusy == false`가 될 때까지 기다린다.
+15. `IPalletizer.ReserveNextSlot()`으로 place slot을 예약한다.
+16. slot의 `approachPos → placePos → retractPos` 순서로 arm을 움직이되, 각 이동 뒤에는 `IsBusy == false`를 확인한다.
+17. `Release()` 후 place 성공이면 `CommitSlot(taskId)`를 호출한다.
+18. 모든 lock을 해제하고 성공 `MissionResult`를 반환한다.
 
 ## 실패 처리 규칙
 
@@ -91,4 +94,5 @@ GripperAdapter.cs
 - pick/place 좌표 계산은 Pose 담당이다.
 - 색상 판정 로직은 Vision 담당이다.
 - lock 정책 구현은 Safety 담당이다.
+- 베이스 이동과 팔 이동을 동시에 명령하지 않는다. `IRobotController.IsBusy`가 false가 된 뒤 다음 명령을 보낸다.
 - `[LOCKED] BaseAssets`의 RobotController, SuctionGripper 원본은 수정하지 않는다.

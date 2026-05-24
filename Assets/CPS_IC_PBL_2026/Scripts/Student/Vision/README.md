@@ -6,7 +6,7 @@ Slice D: Vision / Safety / Telemetry / Bootstrap
 
 ## 이 디렉터리의 책임
 
-`ColorArea.color` 값을 받아 물품이 Normal인지 Abnormal인지 분류한다. 분류는 반드시 색상 센서 기반으로 해야 하며, `RealProduct.isNormal` 같은 내부 정답값을 읽으면 안 된다.
+`ColorArea.color` 값을 받아 물품이 Normal인지 Abnormal인지 분류한다. `ColorSensor`를 참조하는 경우에도 실제 색상값은 `ColorSensor.area.color`에서 나온다. 분류는 반드시 색상 센서 기반으로 해야 하며, `RealProduct.isNormal` 같은 내부 정답값을 읽으면 안 된다.
 
 ## 생성할 코드 파일
 
@@ -20,7 +20,7 @@ ColorClassifier.cs
 
 ## 입력
 
-- Robot/MissionExecutor가 전달하는 `ColorArea.color`
+- Robot/MissionExecutor가 전달하는 `ColorSensor.area.color` 또는 `ColorArea.color`
 - 기준 색상:
   - Normal: `#3140DD`
   - Abnormal: `#E03636`
@@ -46,7 +46,7 @@ ColorClassifier.cs
 
 - Robot은 직접 색상 판정 로직을 구현하지 않고 `IColorClassifier.Classify()`만 호출한다.
 - Telemetry에는 sensed color, 판정 결과, reliable 여부, distance 값을 남길 수 있게 한다.
-- Bootstrap은 RobotA/B 각각의 `ColorArea` reference를 연결한다.
+- Bootstrap은 RobotA/B 각각의 `ColorSensor` 또는 `ColorArea` reference를 연결한다.
 
 ## 구현 순서
 
@@ -54,7 +54,7 @@ ColorClassifier.cs
 2. RGB distance 계산 함수를 만든다.
 3. Normal/Abnormal/Unknown 판정 로직을 만든다.
 4. default color 또는 ambiguous color를 `reliable=false`로 처리한다.
-5. RobotA/B의 ColorArea에서 실제 색상이 읽히는지 확인한다.
+5. RobotA/B의 ColorSensor/ColorArea에서 실제 색상이 읽히는지 확인한다.
 
 ## 완료 기준
 

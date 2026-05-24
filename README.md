@@ -356,7 +356,7 @@ agent 없이 직접 작업할 때도 문서 읽는 순서는 같다.
 - `StationPose`는 `actionPos` 필드명을 사용한다.
 - RobotA/B는 같은 Robot 실행 코드를 두 인스턴스에서 재사용하는 구조로 만든다.
 - Fleet reservation과 Safety lock을 혼동하지 않는다.
-- 색상 분류는 `ColorArea.color` 기반으로만 한다.
+- 색상 분류는 `ColorSensor.area.color` 또는 `ColorArea.color` 기반으로만 한다.
 - `RealProduct.isNormal`, 제품 이름, 태그, 채점기 정보로 분류를 우회하지 않는다.
 - pick/place 좌표는 Unity 실행 테스트로 보정한다.
 
@@ -378,6 +378,8 @@ GoToOperatingStation(101)    -> Abnormal Box station
 
 즉, RobotA/B가 컨베이어나 박스 앞으로 가는 이동은 `OperatingStations.asset`에 정의된 station을 기준으로 한다.
 
+베이스 이동과 팔 이동을 동시에 명령하지 않는다. `IRobotController.IsBusy == false`가 된 뒤 다음 이동 명령을 보낸다.
+
 ### 팔 pick/place 이동
 
 팔 동작은 좌표 기반이다.
@@ -389,6 +391,7 @@ approachPos -> actionPos -> retractPos
 - conveyor에서는 `actionPos`가 실제 pick 위치다.
 - box에서는 `placePos`가 실제 place 위치다.
 - 좌표는 world position 기준으로 캘리브레이션한다.
+- `MoveArmTo()`의 `worldRot`은 레포 기준 down-facing IK 때문에 사실상 무시되므로, 회전보다 위치 보정이 중요하다.
 
 ### Palletizing
 
@@ -413,7 +416,7 @@ ReserveNextSlot()
 - [ ] queue length `1~10` 읽기 가능
 - [ ] RobotA 단일 mission 성공
 - [ ] RobotB 단일 mission 성공
-- [ ] ColorArea 기반 Normal/Abnormal 분류
+- [ ] ColorSensor/ColorArea 기반 Normal/Abnormal 분류
 - [ ] Normal Box / Abnormal Box slot place 성공
 - [ ] 같은 conveyor/box/central/arm zone 중복 점유 방지
 - [ ] 180초 전체 시뮬레이션 반복 테스트
