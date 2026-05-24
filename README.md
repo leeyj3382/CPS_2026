@@ -73,6 +73,196 @@ git checkout -b feat/slice-A
 
 ---
 
+## GitHub 사용법
+
+팀원이 GitHub를 처음 쓰는 경우 아래 순서대로 진행한다. 명령어는 프로젝트 루트 디렉터리에서 실행한다.
+
+### 1. 처음 프로젝트 받기
+
+프로젝트 폴더가 아직 없다면 `git clone`으로 받는 것이 가장 안전하다.
+
+```bash
+git clone https://github.com/leeyj3382/CPS_2026.git
+cd CPS_2026
+```
+
+받은 뒤 현재 브랜치를 확인한다.
+
+```bash
+git branch
+git status
+```
+
+### 2. 이미 폴더가 있는 경우 저장소 연결
+
+이미 프로젝트 폴더를 받은 상태인데 GitHub 저장소와 연결되어 있지 않다면 다음 순서로 진행한다.
+
+```bash
+git init
+git remote add origin https://github.com/leeyj3382/CPS_2026.git
+git fetch origin
+git checkout -B main origin/main
+```
+
+주의: `git checkout -B main origin/main`은 로컬 `main`을 원격 `main` 기준으로 다시 맞추는 명령이다. 이미 작업한 파일이 있거나 commit하지 않은 변경사항이 있으면 먼저 `git status`로 확인한다.
+
+연결이 잘 되었는지 확인한다.
+
+```bash
+git remote -v
+git branch
+```
+
+### 3. 작업 시작 전 main 최신화
+
+작업을 시작하기 전에는 항상 로컬 `main`을 최신 상태로 만든다.
+
+```bash
+git checkout main
+git pull origin main
+```
+
+### 4. 개인 Slice 브랜치 생성
+
+`main`을 최신화한 뒤 자기 Slice 브랜치를 만든다.
+
+```bash
+git checkout -b feat/slice-A
+```
+
+이미 브랜치가 있는 경우에는 새로 만들지 말고 이동한다.
+
+```bash
+git checkout feat/slice-A
+```
+
+### 5. 개발 후 커밋
+
+작업 후 변경 파일을 확인한다.
+
+```bash
+git status
+```
+
+변경한 파일을 stage에 올리고 commit한다.
+
+```bash
+git add Assets/CPS_IC_PBL_2026/Scripts/Student/
+git commit -m "feat: implement slice A work"
+```
+
+작업한 모든 변경사항을 한 번에 올리려면 `git add .`를 사용할 수 있다.
+
+```bash
+git add .
+git commit -m "feat: implement slice A work"
+```
+
+단, `git add .`는 현재 폴더 아래 모든 변경사항을 stage에 올린다. commit 전에 반드시 `git status`로 의도하지 않은 파일, scene 파일, `[LOCKED] BaseAssets` 변경사항이 포함되지 않았는지 확인한다.
+
+커밋 메시지는 너무 길게 쓰지 않아도 되지만, 어떤 작업인지 알 수 있게 적는다.
+
+예시:
+
+```text
+feat: add common schema
+feat: add robot mission skeleton
+feat: add pose table
+fix: release lock on mission failure
+docs: update slice guide
+```
+
+### 6. 개인 브랜치 push
+
+처음 push할 때는 `-u` 옵션을 붙인다.
+
+```bash
+git push -u origin feat/slice-A
+```
+
+이후 같은 브랜치에서 추가 커밋을 push할 때는 아래처럼 해도 된다.
+
+```bash
+git push
+```
+
+### 7. Pull Request 만들기
+
+GitHub 웹사이트에서 다음 순서로 PR을 만든다.
+
+1. GitHub 저장소로 이동한다.
+2. `Compare & pull request`를 누른다.
+3. base branch가 `main`인지 확인한다.
+4. compare branch가 자신의 `feat/slice-*` 브랜치인지 확인한다.
+5. 작업 내용과 테스트 여부를 간단히 적는다.
+6. PR을 생성한다.
+7. 팀원 확인 후 `main`에 merge한다.
+
+PR 제목 예시:
+
+```text
+feat: implement slice A common and fleet skeleton
+feat: implement slice B robot mission flow
+feat: implement slice C pose and palletizer
+feat: implement slice D bootstrap safety telemetry
+```
+
+### 8. 작업 중 main 변경사항 가져오기
+
+다른 팀원의 PR이 먼저 merge되면, 내 브랜치에도 최신 `main`을 반영해야 한다.
+
+```bash
+git checkout main
+git pull origin main
+git checkout feat/slice-A
+git merge main
+```
+
+충돌이 나면 충돌 파일을 직접 수정한 뒤 아래 순서로 마무리한다.
+
+```bash
+git status
+git add <충돌 해결한 파일>
+git commit
+git push
+```
+
+### 9. Unity 협업 주의사항
+
+Unity 프로젝트는 일반 코드 프로젝트보다 파일 참조가 깨지기 쉽다. 아래 규칙을 지킨다.
+
+- `.meta` 파일은 반드시 관련 asset/script와 같이 커밋한다.
+- `Library/`, `Temp/`, `Obj/`, `Build/`, `Logs/` 폴더는 커밋하지 않는다.
+- scene 파일(`.unity`)은 한 명만 수정한다.
+- prefab 원본은 가능하면 수정하지 않는다.
+- Inspector reference 연결이 필요하면 scene 담당자에게 요청한다.
+- Unity에서 파일을 이동하거나 이름을 바꿀 때는 Finder가 아니라 Unity Editor 안에서 처리한다.
+- `[LOCKED] BaseAssets` 하위 원본 파일은 수정하지 않는다.
+
+### 10. PR 전 체크리스트
+
+PR을 열기 전에 아래를 확인한다.
+
+- [ ] 현재 브랜치가 `main`이 아닌지 확인했다.
+- [ ] `git status`로 의도하지 않은 파일이 없는지 확인했다.
+- [ ] `[LOCKED] BaseAssets` 하위 파일이 변경되지 않았는지 확인했다.
+- [ ] `.unity` scene 파일을 실수로 수정하지 않았는지 확인했다.
+- [ ] 필요한 `.meta` 파일이 같이 포함되어 있는지 확인했다.
+- [ ] Unity Console compile error가 없는지 확인했다.
+- [ ] 내가 맡은 Slice README의 완료 기준을 확인했다.
+
+### 11. GitHub 작업 시 주의사항
+
+- `main`에서 직접 개발하지 않는다.
+- 작업 전에는 항상 `main`을 최신화한다.
+- 개인 작업은 반드시 `feat/slice-A`, `feat/slice-B`, `feat/slice-C`, `feat/slice-D` 중 자기 브랜치에서 한다.
+- PR 없이 `main`에 바로 merge하지 않는다.
+- Unity scene 파일은 충돌이 자주 나므로 한 명만 수정한다.
+- `[LOCKED] BaseAssets` 하위 파일이 변경사항에 들어가면 PR 전에 반드시 확인한다.
+- commit 전에 `git status`로 의도하지 않은 파일이 들어갔는지 확인한다.
+
+---
+
 ## AI Agent를 쓰는 경우
 
 AI agent에게는 문서를 읽는 순서와 본인의 Slice를 명확히 알려줘야 한다. 한 번에 전체 구현을 맡기기보다, 작은 작업 단위로 나눠서 진행한다.
