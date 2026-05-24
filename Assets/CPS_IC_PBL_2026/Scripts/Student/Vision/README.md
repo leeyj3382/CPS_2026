@@ -27,7 +27,7 @@ ColorClassifier.cs
 
 ## 출력
 
-- `ColorClassificationResult.productClass`
+- `ColorClassificationResult.result` (`ClassificationResult`)
 - `sensedColor`
 - `blueDistance`
 - `redDistance`

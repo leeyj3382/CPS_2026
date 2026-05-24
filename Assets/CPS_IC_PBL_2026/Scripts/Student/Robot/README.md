@@ -54,13 +54,14 @@ GripperAdapter.cs
 9. 실패 시 `CanGrip(out reason)`의 reason을 telemetry에 남긴다.
 10. `IsHolding`으로 grip 성공 여부를 확인한다.
 11. `ColorSensor.area.color` 또는 `ColorArea.color`를 읽어 `IColorClassifier.Classify()`에 전달한다.
-12. Normal이면 station `100`, Abnormal이면 station `101`로 목적지를 정한다.
-13. box lock을 얻고 `GoToOperatingStation(100 또는 101)`로 이동한다.
-14. `IsBusy == false`가 될 때까지 기다린다.
-15. `IPalletizer.ReserveNextSlot()`으로 place slot을 예약한다.
-16. slot의 `approachPos → placePos → retractPos` 순서로 arm을 움직이되, 각 이동 뒤에는 `IsBusy == false`를 확인한다.
-17. `Release()` 후 place 성공이면 `CommitSlot(taskId)`를 호출한다.
-18. 모든 lock을 해제하고 성공 `MissionResult`를 반환한다.
+12. `ColorClassificationResult.result`의 `ClassificationResult`를 확인하고, 목적 박스가 확정되면 `BoxType`으로 변환한다.
+13. `BoxType.Normal`이면 station `100`, `BoxType.Abnormal`이면 station `101`로 목적지를 정한다.
+14. box lock을 얻고 `GoToOperatingStation(100 또는 101)`로 이동한다.
+15. `IsBusy == false`가 될 때까지 기다린다.
+16. `IPalletizer.ReserveNextSlot(boxType, robotId, taskId)`으로 place slot을 예약한다.
+17. slot의 `approachPos → placePos → retractPos` 순서로 arm을 움직이되, 각 이동 뒤에는 `IsBusy == false`를 확인한다.
+18. `Release()` 후 place 성공이면 `CommitSlot(taskId)`를 호출한다.
+19. 모든 lock을 해제하고 성공 `MissionResult`를 반환한다.
 
 ## 실패 처리 규칙
 
@@ -84,7 +85,7 @@ GripperAdapter.cs
 - RobotB도 같은 코드 경로로 물품 1개를 처리할 수 있다.
 - 같은 `RobotAgent` / `MissionExecutor` 구현을 RobotA/B 두 인스턴스에 재사용할 수 있다.
 - `TryGrip()` 후 `IsHolding`을 확인한다.
-- 색상 분류 결과에 따라 station `100` 또는 `101`로 이동한다.
+- 색상 분류 결과 `ClassificationResult`를 목적 박스 `BoxType`으로 변환해 station `100` 또는 `101`로 이동한다.
 - `MissionResult`가 success/failure reason을 포함해 Fleet로 반환된다.
 - 실패/timeout 경로에서 lock과 slot reservation이 정리된다.
 

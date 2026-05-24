@@ -61,7 +61,7 @@ TaskAllocator.cs
 
 ## 다른 슬라이스와의 연결
 
-- Common의 `WorkTask`, `MissionRequest`, `MissionResult`, `ConveyorSnapshot`, `RobotSnapshot` 사용
+- Common의 `WorkTask`, `MissionRequest`, `MissionResult`, `ConveyorSnapshot`, `StudentRobotSnapshot` 사용
 - Robot의 `IRobotAgent.StartMission()`만 호출
 - Telemetry의 `ITelemetryLogger`로 task 로그 기록
 - Safety의 물리 lock은 Fleet가 직접 잡지 않는다. Fleet는 conveyor reservation만 관리한다.

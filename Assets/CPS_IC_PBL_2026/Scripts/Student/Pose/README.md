@@ -20,12 +20,12 @@ Palletizer.cs
 
 - `PoseTable.cs`: `IPoseProvider` 구현, conveyor `1~10` pick pose와 box base pose 제공
 - `CalibrationManager.cs`: Unity 테스트 중 approach/action/retract 좌표를 빠르게 확인하고 보정하는 보조 도구
-- `Palletizer.cs`: `IPalletizer` 구현, product class별 slot 예약/확정/해제 관리
+- `Palletizer.cs`: `IPalletizer` 구현, `BoxType`별 slot 예약/확정/해제 관리
 
 ## 입력
 
 - Robot에서 전달하는 conveyor id
-- Robot에서 전달하는 `ProductClass`
+- Robot에서 전달하는 목적 박스 `BoxType`
 - Robot에서 전달하는 robot id, task id
 - 가능하면 Bootstrap에서 연결된 `IEnvironmentInfo.GetBoxOccupancy(BoxType box)`
 - 선택적으로 Bootstrap에서 연결된 Normal/Abnormal `BoxTrigger`
@@ -48,7 +48,7 @@ Palletizer.cs
 ## Palletizer 구현 기준
 
 - Normal Box와 Abnormal Box의 slot index를 별도로 관리한다.
-- `ReserveNextSlot(productClass, robotId, taskId)`는 같은 slot 중복 사용을 막아야 한다.
+- `ReserveNextSlot(boxType, robotId, taskId)`는 같은 slot 중복 사용을 막아야 한다.
 - place 성공 시 `CommitSlot(taskId)`로 확정한다.
 - place 실패 또는 mission 실패 시 `ReleaseSlot(taskId)`로 예약을 되돌린다.
 - `BoxTrigger`를 직접 참조하는 경우 `IsSlotOccupied(slotIndex)`로 중복 여부를 확인하고, place 성공 후 `RegisterSlotPlacement(slotIndex)`로 점유를 등록할 수 있다.

@@ -398,7 +398,7 @@ approachPos -> actionPos -> retractPos
 팔레타이징은 box 내부 slot 좌표 기반이다.
 
 ```text
-ReserveNextSlot()
+ReserveNextSlot(BoxType boxType, int robotId, int taskId)
 -> slot.approachPos
 -> slot.placePos
 -> Release()
