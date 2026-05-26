@@ -540,7 +540,8 @@ IEnvironmentInfo env;
 출력:
 
 ```csharp
-ConveyorSnapshot[] conveyors;
+EnvironmentScanner scanner = new EnvironmentScanner(env);
+ConveyorSnapshot[] conveyors = scanner.Scan(reservedConveyorIds, lastAssignedAtByConveyor);
 ```
 
 처리 내용:
@@ -548,8 +549,8 @@ ConveyorSnapshot[] conveyors;
 - `GetQueueLength(1~10)` 호출
 - `NextProductionAt(1~10)` 호출
 - 컨베이어별 생산 주기 매핑
-- 예약 여부 반영
-- 큐가 0인 컨베이어는 작업 후보에서 제외
+- FleetManager가 소유하는 예약 여부와 마지막 배정 시각 반영
+- 1~10번 snapshot은 모두 반환하고, 큐가 0인 컨베이어 제외는 `TaskAllocator`가 처리
 
 주의: 현재 레포 구현에서 `NextProductionAt()`은 `-1`을 반환할 수 있다. 이 경우 `GetQueueLength()` polling과 컨베이어 생산 주기 상수를 우선 사용한다.
 
@@ -565,31 +566,40 @@ static readonly Dictionary<int, float> ConveyorPeriods = new()
 
 ### 3) TaskAllocator 구현
 
-`ConveyorSnapshot[]`와 `StudentRobotSnapshot`을 받아 가장 처리할 가치가 높은 작업을 고른다.
+`ConveyorSnapshot[]`, `StudentRobotSnapshot`, Fleet가 생성한 `WorkTask[]`를 받아 queue saturation deadline이 가장 이른 미배정 `Pending` 작업을 고른다. task 생성, reservation 설정/해제, robot 배정은 `FleetManager`가 담당한다.
 
-권장 점수식:
+구현 정책: Non-Preemptive EDF-Inspired
 
 ```text
-priorityScore =
-    queueLength * 100
-  + overflowRiskScore
-  + speedScore
-  + waitingScore
-  - distanceCost
-  - reservationPenalty
+estimatedSaturationDeadline =
+    nextProductionAt + (remainingSlots - 1) * productionPeriod
+
+fallback when NextProductionAt is unavailable:
+    remainingSlots * productionPeriod
 ```
 
-권장 기준:
+선택 기준:
 
-- `queueLength == 3`: 최우선
-- `queueLength == 2`이고 생산 주기가 짧은 컨베이어: 우선
-- 1~4번 컨베이어: 기본 우선순위 높음
+- `queueLength >= 3`: deadline이 즉시 도래한 후보로 최우선 선택
+- 그 외 후보: estimated saturation deadline이 이른 순서로 선택
 - 이미 예약된 컨베이어: 제외
-- idle 로봇과 너무 먼 컨베이어: 점수 감점
+- `Reserved` 또는 `Running` task: 재선택하지 않으며 시작된 mission은 중단하지 않음
+- 동점이면 짧은 생산 주기, `[LOCKED]` 공식 station 기준 가까운 거리, 오래 배정되지 않은 conveyor, 오래된 task, 낮은 conveyor id 순서로 선택
+- 선택 가능한 미배정 `Pending` 작업이 없으면 `null` 반환
+
+이 정책은 두 로봇과 non-preemptive mission 환경에서 overflow를 줄이기 위한 EDF-inspired heuristic이며, 일반 CPU EDF의 최적성 보장을 의미하지 않는다.
 
 ### 4) FleetManager 구현
 
 FleetManager는 전체 루프를 관리한다.
+
+구현 연결 기준:
+
+- scene에 직접 붙이는 Student component는 `FleetManager`이고, `EnvironmentScanner`와 `TaskAllocator`는 내부 일반 C# 객체로 생성한다.
+- Inspector에는 공식 `EnvironmentInfo`와 선택적 `OperatingStations`를 연결한다.
+- Slice B/D가 없는 동안에는 environment polling과 pending task 생성만 독립 실행할 수 있다.
+- 이후 `StudentBootstrap`이 `Configure(...)`를 통해 RobotA/B의 `IRobotAgent`와 `ITelemetryLogger`를 주입한다.
+- 거리 동점 비교는 실제 robot snapshot 위치가 공급되는 통합 시점에 활성화한다.
 
 동작 흐름:
 
@@ -597,8 +607,8 @@ FleetManager는 전체 루프를 관리한다.
 1. EnvironmentScanner로 queue snapshot 갱신
 2. RobotA/B 상태 snapshot 갱신
 3. idle robot 찾기
-4. TaskAllocator로 작업 선택
-5. WorkTask 생성 또는 기존 pending task 선택
+4. snapshot에 따라 미배정 pending WorkTask 생성 또는 갱신
+5. TaskAllocator로 pending 작업 선택
 6. conveyor reservation 설정
 7. MissionRequest 생성
 8. RobotAgent.StartMission(request, callback) 호출
@@ -1619,13 +1629,13 @@ fix/integration-two-robots
 ### Slice A 체크리스트
 
 - [ ] Common schema 작성
-- [ ] `EnvironmentScanner` 작성
-- [ ] `FleetManager` 작성
-- [ ] `TaskAllocator` 작성
+- [x] `EnvironmentScanner` 작성
+- [x] `FleetManager` 작성
+- [x] `TaskAllocator` 작성
 - [ ] queue length polling 동작
 - [ ] WorkTask 생성/배정 동작
-- [ ] MissionResult callback 처리
-- [ ] task retry/fail 처리
+- [x] MissionResult callback 처리
+- [x] task retry/fail 처리
 - [ ] 완료 시간 및 처리 개수 집계
 
 ### Slice B 체크리스트
