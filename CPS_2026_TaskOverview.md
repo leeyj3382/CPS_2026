@@ -340,34 +340,42 @@ approach pose 이동
 - 실패/재시도 횟수
 - 현재 시뮬레이션 시간
 
+#### 구현 연결 기준
+
+- `FleetManager`는 Student GameObject에 붙는 `MonoBehaviour`로 두고, 공식 `EnvironmentInfo`와 선택적 `OperatingStations`를 참조한다.
+- `EnvironmentScanner`와 `TaskAllocator`는 내부 scheduling 객체로 생성한다.
+- B/D 미구현 상태에서는 pending task 생성까지 단독 실행하고, 이후 Bootstrap이 `IRobotAgent` A/B와 `ITelemetryLogger`를 주입한다.
+- mission이 시작된 task는 `Running` 상태로 유지하며 callback 전에는 다른 task로 교체하지 않는다.
+
 ---
 
 ### 6.2 TaskAllocator
 
 #### 역할
 
-어떤 컨베이어를 먼저 처리할지, 어떤 로봇에게 배정할지 결정한다.
+Fleet가 만든 미배정 `Pending` 작업 중, 전달받은 `StudentRobotSnapshot` 기준으로 어느 컨베이어 작업을 먼저 처리할지 선택한다. idle robot 확인, robot 배정, reservation 생성/해제는 `FleetManager`가 담당한다.
 
-#### 기본 전략
+#### 기본 전략: Non-Preemptive EDF-Inspired
 
 ```text
-priority =
-    queue length score
-  + conveyor speed score
-  + waiting time score
-  + overflow risk score
-  - robot distance cost
-  - reserved resource penalty
+estimatedSaturationDeadline =
+    nextProductionAt + (remainingSlots - 1) * productionPeriod
+
+fallback when NextProductionAt is unavailable:
+    remainingSlots * productionPeriod
 ```
 
 #### 권장 우선순위
 
-1. 큐 길이가 3인 컨베이어
-2. 큐 길이가 2이면서 생산 주기가 짧은 컨베이어
-3. 1~4번처럼 생산 주기가 짧은 컨베이어
-4. 오랫동안 처리되지 않은 컨베이어
-5. 현재 idle 로봇과 가까운 컨베이어
-6. 이미 다른 로봇이 예약한 컨베이어는 제외
+1. 큐 길이가 capacity `3`에 도달한 컨베이어는 즉시 deadline으로 최우선 선택
+2. 나머지는 queue가 가득 찰 예상 deadline이 가장 이른 컨베이어 선택
+3. `NextProductionAt()`이 유효하지 않으면 남은 칸 수와 생산 주기로 deadline 추정
+4. 같은 deadline이면 짧은 생산 주기, 현재 robot과 가까운 컨베이어, 오래 대기한 작업 순으로 선택
+5. 이미 다른 로봇이 예약했거나 `Reserved`/`Running`인 task는 제외
+
+선택 가능한 작업이 없으면 `null`을 반환한다. 거리 비교가 필요한 경우 `[LOCKED]`의 공식 station 위치를 사용한다. 일단 시작된 mission은 중단하거나 다른 task로 교체하지 않는다.
+
+이 정책은 CPU EDF에서 착안한 overflow 방지 heuristic이다. 두 로봇의 병렬 실행과 mission 수행 시간을 포함한 정식 실시간 스케줄 가능성 분석은 별도 과제로 둔다.
 
 #### 구현 포인트
 
