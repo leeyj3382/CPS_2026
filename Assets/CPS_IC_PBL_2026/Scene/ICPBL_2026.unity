@@ -8249,7 +8249,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   environmentInfoComponent: {fileID: 1504378417}
-  operatingStations: {fileID: 0}
+  operatingStations: {fileID: 11400000, guid: 667bb907820e74b4f8756d19fbc1c215, type: 2}
   pollingIntervalSec: 0.25
   maxRetryCount: 1
   runAutomatically: 1
