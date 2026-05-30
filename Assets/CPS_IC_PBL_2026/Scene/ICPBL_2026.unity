@@ -7606,6 +7606,124 @@ MonoBehaviour:
     serializedVersion: 2
     m_Bits: 4294967295
   searchRendererInParents: 1
+--- !u!1 &1922054701
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1922054703}
+  - component: {fileID: 1922054702}
+  - component: {fileID: 1922054704}
+  - component: {fileID: 1922054705}
+  m_Layer: 0
+  m_Name: PoseTable
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &1922054702
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1922054701}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: b49a8d0a1a4e470a985848dc66ad2d9d, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  operatingStations: {fileID: 0}
+  conveyorApproachOffset: {x: 0, y: 0.25, z: 0}
+  conveyorActionOffset: {x: 0, y: -0.35, z: 0}
+  conveyorRetractOffset: {x: 0, y: 0.35, z: 0}
+  conveyorArmMoveDuration: 1
+  boxApproachOffset: {x: 0, y: 0.55, z: 0}
+  boxActionOffset: {x: 0, y: 0.2, z: 0}
+  boxRetractOffset: {x: 0, y: 0.65, z: 0}
+  boxArmMoveDuration: 1
+  conveyorPickOverrides: []
+  normalBoxBaseOverride:
+    stationId: 0
+    approachPos: {x: 0, y: 0, z: 0}
+    actionPos: {x: 0, y: 0, z: 0}
+    retractPos: {x: 0, y: 0, z: 0}
+    armMoveDuration: 1
+  abnormalBoxBaseOverride:
+    stationId: 0
+    approachPos: {x: 0, y: 0, z: 0}
+    actionPos: {x: 0, y: 0, z: 0}
+    retractPos: {x: 0, y: 0, z: 0}
+    armMoveDuration: 1
+  drawGizmos: 1
+  debugStationId: 1
+  gizmoRadius: 0.08
+--- !u!4 &1922054703
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1922054701}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &1922054704
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1922054701}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 293ec975cee91164eb383dde4698cf0a, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  poseTable: {fileID: 1922054702}
+  stationId: 1
+  approachOffset: {x: 0, y: 0, z: 0}
+  actionOffset: {x: 0, y: 0, z: 0}
+  retractOffset: {x: 0, y: 0, z: 0}
+  drawGizmos: 1
+  drawBasePose: 1
+  gizmoRadius: 0.08
+--- !u!114 &1922054705
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1922054701}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 20bf62104cdd3154cb41647884a5b93a, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  poseTable: {fileID: 1922054702}
+  normalBoxTrigger: {fileID: 0}
+  abnormalBoxTrigger: {fileID: 0}
+  registerBoxTriggerOnCommit: 1
+  columns: 4
+  rows: 3
+  slotSpacing: {x: 0.32, y: 0, z: 0.32}
+  normalGridOriginOffset: {x: -0.48, y: 0, z: -0.32}
+  abnormalGridOriginOffset: {x: -0.48, y: 0, z: -0.32}
+  placeApproachOffset: {x: 0, y: 0.35, z: 0}
+  placeRetractOffset: {x: 0, y: 0.45, z: 0}
+  drawGizmos: 1
+  drawNormalSlots: 1
+  drawAbnormalSlots: 1
+  gizmoRadius: 0.06
 --- !u!1 &1952852412
 GameObject:
   m_ObjectHideFlags: 0
@@ -8451,3 +8569,4 @@ SceneRoots:
   - {fileID: 925312983041519886}
   - {fileID: 1719549879}
   - {fileID: 2140976383}
+  - {fileID: 1922054703}

@@ -7,6 +7,8 @@ namespace CPS.ICPBL.Student
 {
     public class PoseTable : MonoBehaviour, IPoseProvider
     {
+        private const float MinArmMoveDuration = 0.01f;
+
         [Header("Optional Base Station Source")]
         [SerializeField] private OperatingStations operatingStations;
 
@@ -27,6 +29,11 @@ namespace CPS.ICPBL.Student
         [SerializeField] private StationPose normalBoxBaseOverride;
         [SerializeField] private StationPose abnormalBoxBaseOverride;
 
+        [Header("Scene Debug")]
+        [SerializeField] private bool drawGizmos = true;
+        [SerializeField] private int debugStationId = StudentConstants.MinConveyorId;
+        [SerializeField] private float gizmoRadius = 0.08f;
+
         private readonly StationPose[] conveyorPickPoses = new StationPose[StudentConstants.MaxConveyorId + 1];
         private StationPose normalBoxBasePose;
         private StationPose abnormalBoxBasePose;
@@ -42,6 +49,18 @@ namespace CPS.ICPBL.Student
             }
 
             return ClonePose(conveyorPickPoses[conveyorId]);
+        }
+
+        public bool TryGetConveyorPickPose(int conveyorId, out StationPose pose)
+        {
+            if (!StudentConstants.IsConveyorId(conveyorId))
+            {
+                pose = null;
+                return false;
+            }
+
+            pose = GetConveyorPickPose(conveyorId);
+            return pose != null;
         }
 
         public StationPose GetBoxBasePose(BoxType boxType)
@@ -61,6 +80,18 @@ namespace CPS.ICPBL.Student
             throw new ArgumentOutOfRangeException(nameof(boxType), boxType, "Unsupported box type.");
         }
 
+        public bool TryGetBoxBasePose(BoxType boxType, out StationPose pose)
+        {
+            if (boxType == BoxType.Normal || boxType == BoxType.Abnormal)
+            {
+                pose = GetBoxBasePose(boxType);
+                return pose != null;
+            }
+
+            pose = null;
+            return false;
+        }
+
         private void Awake()
         {
             EnsureInitialized();
@@ -68,6 +99,9 @@ namespace CPS.ICPBL.Student
 
         private void OnValidate()
         {
+            conveyorArmMoveDuration = Mathf.Max(MinArmMoveDuration, conveyorArmMoveDuration);
+            boxArmMoveDuration = Mathf.Max(MinArmMoveDuration, boxArmMoveDuration);
+            gizmoRadius = Mathf.Max(0.01f, gizmoRadius);
             initialized = false;
         }
 
@@ -95,7 +129,7 @@ namespace CPS.ICPBL.Student
                     approachPos = anchor + conveyorApproachOffset,
                     actionPos = anchor + conveyorActionOffset,
                     retractPos = anchor + conveyorRetractOffset,
-                    armMoveDuration = conveyorArmMoveDuration
+                    armMoveDuration = Mathf.Max(MinArmMoveDuration, conveyorArmMoveDuration)
                 };
             }
         }
@@ -115,7 +149,7 @@ namespace CPS.ICPBL.Student
                 approachPos = anchor + boxApproachOffset,
                 actionPos = anchor + boxActionOffset,
                 retractPos = anchor + boxRetractOffset,
-                armMoveDuration = boxArmMoveDuration
+                armMoveDuration = Mathf.Max(MinArmMoveDuration, boxArmMoveDuration)
             };
         }
 
@@ -174,19 +208,32 @@ namespace CPS.ICPBL.Student
                         continue;
                     }
 
-                    conveyorPickPoses[overridePose.stationId] = ClonePose(overridePose);
+                    conveyorPickPoses[overridePose.stationId] = NormalizePose(overridePose, overridePose.stationId);
                 }
             }
 
             if (normalBoxBaseOverride != null && normalBoxBaseOverride.stationId == StudentConstants.NormalBoxStationId)
             {
-                normalBoxBasePose = ClonePose(normalBoxBaseOverride);
+                normalBoxBasePose = NormalizePose(normalBoxBaseOverride, StudentConstants.NormalBoxStationId);
             }
 
             if (abnormalBoxBaseOverride != null && abnormalBoxBaseOverride.stationId == StudentConstants.AbnormalBoxStationId)
             {
-                abnormalBoxBasePose = ClonePose(abnormalBoxBaseOverride);
+                abnormalBoxBasePose = NormalizePose(abnormalBoxBaseOverride, StudentConstants.AbnormalBoxStationId);
             }
+        }
+
+        private static StationPose NormalizePose(StationPose pose, int stationId)
+        {
+            StationPose normalized = ClonePose(pose);
+            if (normalized == null)
+            {
+                return null;
+            }
+
+            normalized.stationId = stationId;
+            normalized.armMoveDuration = Mathf.Max(MinArmMoveDuration, normalized.armMoveDuration);
+            return normalized;
         }
 
         private static StationPose ClonePose(StationPose pose)
@@ -204,6 +251,106 @@ namespace CPS.ICPBL.Student
                 retractPos = pose.retractPos,
                 armMoveDuration = pose.armMoveDuration
             };
+        }
+
+        [ContextMenu("PoseTable/Log Selected Station Pose")]
+        private void LogSelectedStationPose()
+        {
+            StationPose pose = GetPoseForDebug(debugStationId);
+            if (pose == null)
+            {
+                Debug.LogWarningFormat(this, "[PoseTable] Station {0} has no pose.", debugStationId);
+                return;
+            }
+
+            Debug.LogFormat(
+                this,
+                "[PoseTable] Station {0}: approach={1}, action={2}, retract={3}, duration={4:0.00}",
+                pose.stationId,
+                pose.approachPos,
+                pose.actionPos,
+                pose.retractPos,
+                pose.armMoveDuration);
+        }
+
+        [ContextMenu("PoseTable/Log All Poses")]
+        private void LogAllPoses()
+        {
+            EnsureInitialized();
+
+            for (int conveyorId = StudentConstants.MinConveyorId; conveyorId <= StudentConstants.MaxConveyorId; conveyorId++)
+            {
+                LogPose(conveyorPickPoses[conveyorId]);
+            }
+
+            LogPose(normalBoxBasePose);
+            LogPose(abnormalBoxBasePose);
+        }
+
+        private void LogPose(StationPose pose)
+        {
+            if (pose == null)
+            {
+                return;
+            }
+
+            Debug.LogFormat(
+                this,
+                "[PoseTable] Station {0}: approach={1}, action={2}, retract={3}, duration={4:0.00}",
+                pose.stationId,
+                pose.approachPos,
+                pose.actionPos,
+                pose.retractPos,
+                pose.armMoveDuration);
+        }
+
+        private void OnDrawGizmosSelected()
+        {
+            if (!drawGizmos)
+            {
+                return;
+            }
+
+            StationPose pose = GetPoseForDebug(debugStationId);
+            if (pose == null)
+            {
+                return;
+            }
+
+            Gizmos.color = Color.cyan;
+            Gizmos.DrawSphere(pose.approachPos, gizmoRadius);
+
+            Gizmos.color = Color.yellow;
+            Gizmos.DrawSphere(pose.actionPos, gizmoRadius);
+
+            Gizmos.color = Color.green;
+            Gizmos.DrawSphere(pose.retractPos, gizmoRadius);
+
+            Gizmos.color = Color.white;
+            Gizmos.DrawLine(pose.approachPos, pose.actionPos);
+            Gizmos.DrawLine(pose.actionPos, pose.retractPos);
+        }
+
+        private StationPose GetPoseForDebug(int stationId)
+        {
+            EnsureInitialized();
+
+            if (StudentConstants.IsConveyorId(stationId))
+            {
+                return conveyorPickPoses[stationId];
+            }
+
+            if (stationId == StudentConstants.NormalBoxStationId)
+            {
+                return normalBoxBasePose;
+            }
+
+            if (stationId == StudentConstants.AbnormalBoxStationId)
+            {
+                return abnormalBoxBasePose;
+            }
+
+            return null;
         }
     }
 }
