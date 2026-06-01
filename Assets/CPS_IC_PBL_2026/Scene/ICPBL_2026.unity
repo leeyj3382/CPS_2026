@@ -8642,12 +8642,12 @@ MonoBehaviour:
   robotBColorSensor: {fileID: 1197561020}
   robotBColorArea: {fileID: 1886561546}
   poseProvider: {fileID: 1922054702}
-  palletizer: {fileID: 2140976384}
-  colorClassifier: {fileID: 2140976384}
-  resourceLockManager: {fileID: 2140976384}
-  pathPlanner: {fileID: 2140976384}
+  palletizer: {fileID: 2140976390}
+  colorClassifier: {fileID: 2140976389}
+  resourceLockManager: {fileID: 2140976388}
+  pathPlanner: {fileID: 2140976387}
   deadlockGuard: {fileID: 2140976386}
-  telemetryLogger: {fileID: 2140976384}
+  telemetryLogger: {fileID: 2140976385}
 --- !u!1001 &925312983041519886
 PrefabInstance:
   m_ObjectHideFlags: 0
