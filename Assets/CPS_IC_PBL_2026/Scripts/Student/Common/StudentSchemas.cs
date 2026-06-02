@@ -36,6 +36,7 @@ namespace CPS.ICPBL.Student
         public TaskStatus status;
         public int retryCount;
         public string debugReason;
+        public bool conveyorPicked;
     }
 
     [Serializable]
@@ -46,6 +47,19 @@ namespace CPS.ICPBL.Student
         public int conveyorId;
         public float requestTime;
         public float timeoutSec = StudentConstants.DefaultMissionTimeoutSec;
+
+        [NonSerialized]
+        public Action<MissionProgressEvent> onProgress;
+    }
+
+    [Serializable]
+    public class MissionProgressEvent
+    {
+        public int taskId;
+        public int robotId;
+        public int conveyorId;
+        public MissionProgressType type;
+        public float occurredAt;
     }
 
     [Serializable]

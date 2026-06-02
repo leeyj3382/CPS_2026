@@ -23,9 +23,12 @@ namespace CPS.ICPBL.Student
         [SerializeField] private bool runAutomatically = true;
         [SerializeField] private bool enableDistanceTieBreaker;
         [SerializeField] private bool logEventsWithoutTelemetry = true;
+        [SerializeField, Min(0f)] private float postPickConveyorCooldownSec = 1.1f;
 
         private readonly HashSet<int> reservedConveyorIds = new HashSet<int>();
         private readonly Dictionary<int, float> lastAssignedAtByConveyor =
+            new Dictionary<int, float>();
+        private readonly Dictionary<int, float> conveyorSchedulingAvailableAt =
             new Dictionary<int, float>();
         private readonly Dictionary<int, WorkTask> activeTaskByConveyor =
             new Dictionary<int, WorkTask>();
@@ -76,6 +79,7 @@ namespace CPS.ICPBL.Student
         {
             pollingIntervalSec = Mathf.Max(0.05f, pollingIntervalSec);
             maxRetryCount = Mathf.Max(0, maxRetryCount);
+            postPickConveyorCooldownSec = Mathf.Max(0f, postPickConveyorCooldownSec);
         }
 
         /// <summary>
@@ -192,6 +196,11 @@ namespace CPS.ICPBL.Student
                     continue;
                 }
 
+                if (!IsConveyorSchedulingAvailable(snapshot.conveyorId))
+                {
+                    continue;
+                }
+
                 if (snapshot.isReserved || HasActiveTask(snapshot.conveyorId))
                 {
                     continue;
@@ -221,6 +230,22 @@ namespace CPS.ICPBL.Student
             return task.status == TaskStatus.Pending
                 || task.status == TaskStatus.Reserved
                 || task.status == TaskStatus.Running;
+        }
+
+        private bool IsConveyorSchedulingAvailable(int conveyorId)
+        {
+            if (!conveyorSchedulingAvailableAt.TryGetValue(conveyorId, out float availableAt))
+            {
+                return true;
+            }
+
+            if (environmentInfo.CurrentTime < availableAt)
+            {
+                return false;
+            }
+
+            conveyorSchedulingAvailableAt.Remove(conveyorId);
+            return true;
         }
 
         private void CancelEmptyPendingTask(int conveyorId)
@@ -351,7 +376,8 @@ namespace CPS.ICPBL.Student
                 robotId = robotId,
                 conveyorId = task.conveyorId,
                 requestTime = assignedAt,
-                timeoutSec = StudentConstants.DefaultMissionTimeoutSec
+                timeoutSec = StudentConstants.DefaultMissionTimeoutSec,
+                onProgress = progress => OnMissionProgress(task.taskId, progress)
             };
 
             task.status = TaskStatus.Running;
@@ -365,6 +391,35 @@ namespace CPS.ICPBL.Student
             {
                 OnMissionFinished(task.taskId, CreateDispatchFailure(task, exception.Message));
             }
+        }
+
+        private void OnMissionProgress(int expectedTaskId, MissionProgressEvent progress)
+        {
+            if (progress == null || progress.type != MissionProgressType.ConveyorPicked)
+            {
+                return;
+            }
+
+            WorkTask task = FindTaskById(expectedTaskId);
+            if (task == null
+                || (task.status != TaskStatus.Reserved && task.status != TaskStatus.Running))
+            {
+                return;
+            }
+
+            if (progress.taskId != task.taskId
+                || progress.robotId != task.assignedRobotId
+                || progress.conveyorId != task.conveyorId)
+            {
+                LogMessage("Scheduling", string.Format(
+                    "Ignored mismatched progress event task={0} robot={1} conveyor={2}.",
+                    progress.taskId,
+                    progress.robotId,
+                    progress.conveyorId));
+                return;
+            }
+
+            MarkConveyorPicked(task);
         }
 
         private void OnMissionFinished(int expectedTaskId, MissionResult result)
@@ -386,14 +441,28 @@ namespace CPS.ICPBL.Student
                 result = CreateDispatchFailure(task, "Mission callback did not match assigned task and robot.");
             }
 
-            ReleaseReservation(task.conveyorId);
+            if (!task.conveyorPicked)
+            {
+                ReleaseReservation(task.conveyorId);
+            }
+
             LogMissionResult(result);
 
             if (result.success)
             {
                 task.status = TaskStatus.Completed;
-                activeTaskByConveyor.Remove(task.conveyorId);
+                RemoveActiveTaskIfMatches(task.conveyorId, task);
                 LogMessage("Scheduling", string.Format("Completed task={0}.", task.taskId));
+                return;
+            }
+
+            if (task.conveyorPicked)
+            {
+                task.status = TaskStatus.Failed;
+                RemoveActiveTaskIfMatches(task.conveyorId, task);
+                LogMessage("Scheduling", string.Format(
+                    "Failed task={0} after conveyor pick; not retrying removed conveyor item.",
+                    task.taskId));
                 return;
             }
 
@@ -411,11 +480,44 @@ namespace CPS.ICPBL.Student
             }
 
             task.status = TaskStatus.Failed;
-            activeTaskByConveyor.Remove(task.conveyorId);
+            RemoveActiveTaskIfMatches(task.conveyorId, task);
             LogMessage("Scheduling", string.Format(
                 "Failed task={0} after retryCount={1}.",
                 task.taskId,
                 task.retryCount));
+        }
+
+        private void MarkConveyorPicked(WorkTask task)
+        {
+            if (task == null || task.conveyorPicked)
+            {
+                return;
+            }
+
+            task.conveyorPicked = true;
+            ReleaseReservation(task.conveyorId);
+            RemoveActiveTaskIfMatches(task.conveyorId, task);
+
+            if (postPickConveyorCooldownSec > 0f)
+            {
+                conveyorSchedulingAvailableAt[task.conveyorId] =
+                    environmentInfo.CurrentTime + postPickConveyorCooldownSec;
+            }
+
+            LogMessage("Scheduling", string.Format(
+                "Released conveyor={0} after pick task={1}; cooldown={2:0.00}s.",
+                task.conveyorId,
+                task.taskId,
+                postPickConveyorCooldownSec));
+        }
+
+        private void RemoveActiveTaskIfMatches(int conveyorId, WorkTask task)
+        {
+            if (activeTaskByConveyor.TryGetValue(conveyorId, out WorkTask activeTask)
+                && activeTask == task)
+            {
+                activeTaskByConveyor.Remove(conveyorId);
+            }
         }
 
         private WorkTask FindTaskById(int taskId)

@@ -84,6 +84,44 @@ namespace CPS.ICPBL.Student.Tests
         }
 
         [Test]
+        public void ConveyorPicked_ReleasesReservationBeforeMissionCompletion()
+        {
+            var robot = new FakeRobotAgent(StudentConstants.RobotAId);
+            environment.SetQueueLength(4, 2);
+            fleetManager.ConfigureRobotAgents(robot, null);
+            fleetManager.RunSchedulingCycle();
+
+            robot.ReportConveyorPicked();
+
+            Assert.That(fleetManager.Tasks[0].conveyorPicked, Is.True);
+            Assert.That(fleetManager.ReservedConveyorIds, Is.Empty);
+
+            fleetManager.RunSchedulingCycle();
+            Assert.That(fleetManager.Tasks, Has.Count.EqualTo(1));
+
+            environment.CurrentTime = 2f;
+            fleetManager.RunSchedulingCycle();
+            Assert.That(fleetManager.Tasks, Has.Count.EqualTo(2));
+            Assert.That(fleetManager.Tasks[1].status, Is.EqualTo(TaskStatus.Pending));
+        }
+
+        [Test]
+        public void FailedMissionAfterConveyorPicked_DoesNotRetryRemovedItem()
+        {
+            var robot = new FakeRobotAgent(StudentConstants.RobotAId);
+            environment.SetQueueLength(5, 1);
+            fleetManager.ConfigureRobotAgents(robot, null);
+            fleetManager.RunSchedulingCycle();
+
+            robot.ReportConveyorPicked();
+            robot.FinishMission(false);
+
+            Assert.That(fleetManager.Tasks[0].status, Is.EqualTo(TaskStatus.Failed));
+            Assert.That(fleetManager.Tasks[0].retryCount, Is.Zero);
+            Assert.That(fleetManager.ReservedConveyorIds, Is.Empty);
+        }
+
+        [Test]
         public void FailedMission_RetriesOnceThenMarksTaskFailed()
         {
             var robot = new FakeRobotAgent(StudentConstants.RobotAId);
@@ -157,6 +195,18 @@ namespace CPS.ICPBL.Student.Tests
                 CanAcceptTask = false;
                 State = RobotRuntimeState.MovingToConveyor;
                 DispatchCount++;
+            }
+
+            public void ReportConveyorPicked()
+            {
+                Assert.That(LastRequest, Is.Not.Null, "No mission is awaiting progress.");
+                LastRequest.onProgress?.Invoke(new MissionProgressEvent
+                {
+                    taskId = LastRequest.taskId,
+                    robotId = RobotId,
+                    conveyorId = LastRequest.conveyorId,
+                    type = MissionProgressType.ConveyorPicked
+                });
             }
 
             public void FinishMission(bool success)

@@ -27,6 +27,11 @@ namespace CPS.ICPBL.Student
         Cancelled = 5
     }
 
+    public enum MissionProgressType
+    {
+        ConveyorPicked = 0
+    }
+
     /// <summary>
     /// Student-side lock resource type extended with CentralZone and RobotArmZone.
     /// This does not replace the locked CPS.ICPBL.Common.ResourceType API type.
