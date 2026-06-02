@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using CPS.ICPBL.Common;
+using CPS.ICPBL.Environment;
 using CPS.Lab11.MobileManipulator;
 using UnityEngine;
 
@@ -22,6 +23,7 @@ namespace CPS.ICPBL.Student
         [SerializeField] private MonoBehaviour colorClassifierComponent;
         [SerializeField] private MonoBehaviour lockManagerComponent;
         [SerializeField] private MonoBehaviour pathPlannerComponent;
+        [SerializeField] private OperatingStations operatingStations;
         [SerializeField] private MonoBehaviour telemetryLoggerComponent;
 
         [Header("Mission Timing")]
@@ -101,7 +103,8 @@ namespace CPS.ICPBL.Student
             IColorClassifier colorClassifier,
             IResourceLockManager lockManager,
             IPathPlanner pathPlanner,
-            ITelemetryLogger telemetryLogger = null)
+            ITelemetryLogger telemetryLogger = null,
+            OperatingStations stationData = null)
         {
             Configure(
                 controller,
@@ -113,7 +116,8 @@ namespace CPS.ICPBL.Student
                 colorClassifier,
                 lockManager,
                 pathPlanner,
-                telemetryLogger);
+                telemetryLogger,
+                stationData);
         }
 
         public void Configure(
@@ -125,7 +129,8 @@ namespace CPS.ICPBL.Student
             IColorClassifier colorClassifier,
             IResourceLockManager lockManager,
             IPathPlanner pathPlanner,
-            ITelemetryLogger telemetryLogger = null)
+            ITelemetryLogger telemetryLogger = null,
+            OperatingStations stationData = null)
         {
             Configure(
                 controller,
@@ -137,7 +142,8 @@ namespace CPS.ICPBL.Student
                 colorClassifier,
                 lockManager,
                 pathPlanner,
-                telemetryLogger);
+                telemetryLogger,
+                stationData);
         }
 
         public void Configure(
@@ -150,7 +156,8 @@ namespace CPS.ICPBL.Student
             IColorClassifier colorClassifier,
             IResourceLockManager lockManager,
             IPathPlanner pathPlanner,
-            ITelemetryLogger telemetryLogger = null)
+            ITelemetryLogger telemetryLogger = null,
+            OperatingStations stationData = null)
         {
             robotController = controller;
             robotControllerComponent = controller as MonoBehaviour;
@@ -163,6 +170,7 @@ namespace CPS.ICPBL.Student
             this.lockManager = lockManager;
             this.pathPlanner = pathPlanner;
             this.telemetryLogger = telemetryLogger;
+            operatingStations = stationData;
 
             poseProviderComponent = poseProvider as MonoBehaviour;
             palletizerComponent = palletizer as MonoBehaviour;
@@ -183,7 +191,8 @@ namespace CPS.ICPBL.Student
             IColorClassifier colorClassifier,
             IResourceLockManager lockManager,
             IPathPlanner pathPlanner,
-            ITelemetryLogger telemetryLogger = null)
+            ITelemetryLogger telemetryLogger = null,
+            OperatingStations stationData = null)
         {
             this.poseProvider = poseProvider;
             this.palletizer = palletizer;
@@ -191,6 +200,7 @@ namespace CPS.ICPBL.Student
             this.lockManager = lockManager;
             this.pathPlanner = pathPlanner;
             this.telemetryLogger = telemetryLogger;
+            operatingStations = stationData;
 
             poseProviderComponent = poseProvider as MonoBehaviour;
             palletizerComponent = palletizer as MonoBehaviour;
@@ -309,6 +319,8 @@ namespace CPS.ICPBL.Student
                 ColorClassifier = colorClassifier,
                 LockManager = lockManager,
                 PathPlanner = pathPlanner,
+                PathReservationManager = pathPlanner as IPathReservationManager,
+                OperatingStations = operatingStations,
                 TelemetryLogger = telemetryLogger,
                 GetCurrentStationId = () => currentStationId,
                 SetCurrentStationId = stationId => currentStationId = stationId,
