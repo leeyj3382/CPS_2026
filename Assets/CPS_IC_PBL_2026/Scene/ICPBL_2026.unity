@@ -6823,7 +6823,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   robotA: {fileID: 925312983041519887}
-  robotB: {fileID: 0}
+  robotB: {fileID: 934169907}
   enableDistanceCheck: 0
   nearCollisionDistance: 1.5
   debugLogInterval: 0
@@ -7082,7 +7082,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 5680480563071017053, guid: 7cb5d1e734ae39d43965ca06e207a0b2, type: 3}
       propertyPath: robotId
-      value: 0
+      value: 1
       objectReference: {fileID: 0}
     - target: {fileID: 5680480563071017053, guid: 7cb5d1e734ae39d43965ca06e207a0b2, type: 3}
       propertyPath: stations
@@ -7122,8 +7122,33 @@ PrefabInstance:
     - targetCorrespondingSourceObject: {fileID: 3585266020698252817, guid: 7cb5d1e734ae39d43965ca06e207a0b2, type: 3}
       insertIndex: -1
       addedObject: {fileID: 1197561019}
-    m_AddedComponents: []
+    m_AddedComponents:
+    - targetCorrespondingSourceObject: {fileID: 4552636238606994245, guid: 7cb5d1e734ae39d43965ca06e207a0b2, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 1993300479}
   m_SourcePrefab: {fileID: 100100000, guid: 7cb5d1e734ae39d43965ca06e207a0b2, type: 3}
+--- !u!114 &1719549880 stripped
+MonoBehaviour:
+  m_CorrespondingSourceObject: {fileID: 5358637263508474803, guid: 7cb5d1e734ae39d43965ca06e207a0b2, type: 3}
+  m_PrefabInstance: {fileID: 1719549879}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 59df5feb924f1ad4eb96c9b6961a3955, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+--- !u!114 &1719549881 stripped
+MonoBehaviour:
+  m_CorrespondingSourceObject: {fileID: 5680480563071017053, guid: 7cb5d1e734ae39d43965ca06e207a0b2, type: 3}
+  m_PrefabInstance: {fileID: 1719549879}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 934169907}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: b7fec8f869eb32f4ca3d7c0066ebc341, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
 --- !u!1001 &1729489216
 PrefabInstance:
   m_ObjectHideFlags: 0
@@ -7606,124 +7631,6 @@ MonoBehaviour:
     serializedVersion: 2
     m_Bits: 4294967295
   searchRendererInParents: 1
---- !u!1 &1922054701
-GameObject:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  serializedVersion: 6
-  m_Component:
-  - component: {fileID: 1922054703}
-  - component: {fileID: 1922054702}
-  - component: {fileID: 1922054704}
-  - component: {fileID: 1922054705}
-  m_Layer: 0
-  m_Name: PoseTable
-  m_TagString: Untagged
-  m_Icon: {fileID: 0}
-  m_NavMeshLayer: 0
-  m_StaticEditorFlags: 0
-  m_IsActive: 1
---- !u!114 &1922054702
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1922054701}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: b49a8d0a1a4e470a985848dc66ad2d9d, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
-  operatingStations: {fileID: 0}
-  conveyorApproachOffset: {x: 0, y: 0.25, z: 0}
-  conveyorActionOffset: {x: 0, y: -0.35, z: 0}
-  conveyorRetractOffset: {x: 0, y: 0.35, z: 0}
-  conveyorArmMoveDuration: 1
-  boxApproachOffset: {x: 0, y: 0.55, z: 0}
-  boxActionOffset: {x: 0, y: 0.2, z: 0}
-  boxRetractOffset: {x: 0, y: 0.65, z: 0}
-  boxArmMoveDuration: 1
-  conveyorPickOverrides: []
-  normalBoxBaseOverride:
-    stationId: 0
-    approachPos: {x: 0, y: 0, z: 0}
-    actionPos: {x: 0, y: 0, z: 0}
-    retractPos: {x: 0, y: 0, z: 0}
-    armMoveDuration: 1
-  abnormalBoxBaseOverride:
-    stationId: 0
-    approachPos: {x: 0, y: 0, z: 0}
-    actionPos: {x: 0, y: 0, z: 0}
-    retractPos: {x: 0, y: 0, z: 0}
-    armMoveDuration: 1
-  drawGizmos: 1
-  debugStationId: 1
-  gizmoRadius: 0.08
---- !u!4 &1922054703
-Transform:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1922054701}
-  serializedVersion: 2
-  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0, y: 0, z: 0}
-  m_LocalScale: {x: 1, y: 1, z: 1}
-  m_ConstrainProportionsScale: 0
-  m_Children: []
-  m_Father: {fileID: 0}
-  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!114 &1922054704
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1922054701}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 293ec975cee91164eb383dde4698cf0a, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
-  poseTable: {fileID: 1922054702}
-  stationId: 1
-  approachOffset: {x: 0, y: 0, z: 0}
-  actionOffset: {x: 0, y: 0, z: 0}
-  retractOffset: {x: 0, y: 0, z: 0}
-  drawGizmos: 1
-  drawBasePose: 1
-  gizmoRadius: 0.08
---- !u!114 &1922054705
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1922054701}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 20bf62104cdd3154cb41647884a5b93a, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
-  poseTable: {fileID: 1922054702}
-  normalBoxTrigger: {fileID: 0}
-  abnormalBoxTrigger: {fileID: 0}
-  registerBoxTriggerOnCommit: 1
-  columns: 4
-  rows: 3
-  slotSpacing: {x: 0.32, y: 0, z: 0.32}
-  normalGridOriginOffset: {x: -0.48, y: 0, z: -0.32}
-  abnormalGridOriginOffset: {x: -0.48, y: 0, z: -0.32}
-  placeApproachOffset: {x: 0, y: 0.35, z: 0}
-  placeRetractOffset: {x: 0, y: 0.45, z: 0}
-  drawGizmos: 1
-  drawNormalSlots: 1
-  drawAbnormalSlots: 1
-  gizmoRadius: 0.06
 --- !u!1 &1952852412
 GameObject:
   m_ObjectHideFlags: 0
@@ -7979,6 +7886,40 @@ Transform:
   m_CorrespondingSourceObject: {fileID: 5614137139763388683, guid: 7cb5d1e734ae39d43965ca06e207a0b2, type: 3}
   m_PrefabInstance: {fileID: 1719549879}
   m_PrefabAsset: {fileID: 0}
+--- !u!114 &1993300479
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 934169907}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f3851bd2e5e07da4987cb5dfe8a79763, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  robotId: 1
+  robotControllerComponent: {fileID: 0}
+  suctionGripper: {fileID: 0}
+  colorSensor: {fileID: 0}
+  colorArea: {fileID: 0}
+  poseProviderComponent: {fileID: 0}
+  palletizerComponent: {fileID: 0}
+  colorClassifierComponent: {fileID: 0}
+  lockManagerComponent: {fileID: 0}
+  pathPlannerComponent: {fileID: 0}
+  telemetryLoggerComponent: {fileID: 0}
+  moveTimeoutSec: 15
+  lockTimeoutSec: 5
+  gripReadyTimeoutSec: 3
+  gripRetryWaitSec: 0.2
+  gripRetryCount: 1
+  colorRetryWaitSec: 0.1
+  colorRetryCount: 1
+  logWithoutTelemetry: 1
+  debugConveyorId: 1
+  debugTaskId: 9001
+  logDebugMissionResult: 1
 --- !u!1001 &1994188514
 PrefabInstance:
   m_ObjectHideFlags: 0
@@ -8332,6 +8273,15 @@ GameObject:
   m_Component:
   - component: {fileID: 2140976383}
   - component: {fileID: 2140976384}
+  - component: {fileID: 2140976393}
+  - component: {fileID: 2140976392}
+  - component: {fileID: 2140976391}
+  - component: {fileID: 2140976390}
+  - component: {fileID: 2140976389}
+  - component: {fileID: 2140976388}
+  - component: {fileID: 2140976387}
+  - component: {fileID: 2140976386}
+  - component: {fileID: 2140976385}
   m_Layer: 0
   m_Name: StudentControllers(TODO)
   m_TagString: Untagged
@@ -8373,6 +8323,210 @@ MonoBehaviour:
   runAutomatically: 1
   enableDistanceTieBreaker: 0
   logEventsWithoutTelemetry: 1
+--- !u!114 &2140976385
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2140976382}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: a83e3940e9d341e8ba9cd6902355800a, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  enableLogging: 1
+  logPrefix: Telemetry
+  includeTimestamp: 1
+  suppressConsecutiveDuplicates: 1
+--- !u!114 &2140976386
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2140976382}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 0f14d90eab5340cc8cf0a883cb39ce81, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  robotAgents: []
+  telemetryLoggerComponent: {fileID: 0}
+  enableDiagnostics: 1
+  waitingWarningSec: 5
+  warningIntervalSec: 2
+  logWithoutTelemetry: 1
+--- !u!114 &2140976387
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2140976382}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 57f2b833dc8241d28bc9c0a03eafbe1e, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  robotAMinConveyor: 1
+  robotAMaxConveyor: 5
+  robotBMinConveyor: 6
+  robotBMaxConveyor: 10
+  requireCentralZoneForCrossSideMove: 1
+  requireCentralZoneForBoxAccess: 1
+--- !u!114 &2140976388
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2140976382}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 72ccf20345ee4a41b3cf363213963906, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  logWarnings: 1
+  warnLongHeldLocks: 1
+  longHoldWarningSec: 10
+  warningIntervalSec: 5
+--- !u!114 &2140976389
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2140976382}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 3cfa8f0787424f90af2f152cf7b5b4b1, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  normalColor: {r: 0.192, g: 0.25, b: 0.868, a: 1}
+  abnormalColor: {r: 0.877, g: 0.211, b: 0.211, a: 1}
+  defaultSensorColor: {r: 1, g: 1, b: 1, a: 1}
+  defaultColorThreshold: 0.15
+  ambiguousDistanceDelta: 0.05
+--- !u!114 &2140976390
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2140976382}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 20bf62104cdd3154cb41647884a5b93a, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  poseTable: {fileID: 2140976391}
+  normalBoxTrigger: {fileID: 242586149}
+  abnormalBoxTrigger: {fileID: 196160528}
+  registerBoxTriggerOnCommit: 1
+  columns: 4
+  rows: 3
+  normalSlotCount: 52
+  abnormalSlotCount: 12
+  slotSpacing: {x: 0.32, y: 0, z: 0.32}
+  layerHeight: 0.22
+  normalGridOriginOffset: {x: -0.48, y: 0, z: -0.32}
+  abnormalGridOriginOffset: {x: -0.48, y: 0, z: -0.32}
+  placeApproachOffset: {x: 0, y: 0.35, z: 0}
+  placeRetractOffset: {x: 0, y: 0.45, z: 0}
+  drawGizmos: 1
+  drawNormalSlots: 1
+  drawAbnormalSlots: 1
+  gizmoRadius: 0.06
+  testBoxType: 0
+  testRobotId: 0
+  testTaskId: 9001
+--- !u!114 &2140976391
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2140976382}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: b49a8d0a1a4e470a985848dc66ad2d9d, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  operatingStations: {fileID: 11400000, guid: 667bb907820e74b4f8756d19fbc1c215, type: 2}
+  conveyorApproachOffset: {x: 0, y: 0.25, z: 0}
+  conveyorActionOffset: {x: 0, y: -0.35, z: 0}
+  conveyorRetractOffset: {x: 0, y: 0.35, z: 0}
+  conveyorArmMoveDuration: 1
+  boxApproachOffset: {x: 0, y: 0.55, z: 0}
+  boxActionOffset: {x: 0, y: 0.2, z: 0}
+  boxRetractOffset: {x: 0, y: 0.65, z: 0}
+  boxArmMoveDuration: 1
+  conveyorPickOverrides: []
+  normalBoxBaseOverride:
+    stationId: 0
+    approachPos: {x: 0, y: 0, z: 0}
+    actionPos: {x: 0, y: 0, z: 0}
+    retractPos: {x: 0, y: 0, z: 0}
+    armMoveDuration: 1
+  abnormalBoxBaseOverride:
+    stationId: 0
+    approachPos: {x: 0, y: 0, z: 0}
+    actionPos: {x: 0, y: 0, z: 0}
+    retractPos: {x: 0, y: 0, z: 0}
+    armMoveDuration: 1
+  drawGizmos: 1
+  debugStationId: 1
+  gizmoRadius: 0.08
+--- !u!114 &2140976392
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2140976382}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: e46b30f8525645a69e94fdaa38aad902, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  sceneReferences: {fileID: 2140976393}
+  configureOnAwake: 1
+  logWarnings: 1
+--- !u!114 &2140976393
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2140976382}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 6c42d7d936254ec592ecc5e86add21d3, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  environmentInfo: {fileID: 1504378417}
+  operatingStations: {fileID: 11400000, guid: 667bb907820e74b4f8756d19fbc1c215, type: 2}
+  normalBox: {fileID: 242586149}
+  abnormalBox: {fileID: 196160528}
+  fleetManager: {fileID: 2140976384}
+  robotAAgent: {fileID: 925312983041519893}
+  robotAController: {fileID: 925312983041519891}
+  robotAGripper: {fileID: 925312983041519888}
+  robotAColorSensor: {fileID: 324584312}
+  robotAColorArea: {fileID: 530073627}
+  robotBAgent: {fileID: 1993300479}
+  robotBController: {fileID: 1719549881}
+  robotBGripper: {fileID: 1719549880}
+  robotBColorSensor: {fileID: 1197561020}
+  robotBColorArea: {fileID: 1886561546}
+  poseProvider: {fileID: 2140976391}
+  palletizer: {fileID: 2140976390}
+  colorClassifier: {fileID: 2140976389}
+  resourceLockManager: {fileID: 2140976388}
+  pathPlanner: {fileID: 2140976387}
+  deadlockGuard: {fileID: 2140976386}
+  telemetryLogger: {fileID: 2140976385}
 --- !u!1001 &925312983041519886
 PrefabInstance:
   m_ObjectHideFlags: 0
@@ -8519,13 +8673,27 @@ PrefabInstance:
     - targetCorrespondingSourceObject: {fileID: 3585266020698252817, guid: 7cb5d1e734ae39d43965ca06e207a0b2, type: 3}
       insertIndex: -1
       addedObject: {fileID: 324584311}
-    m_AddedComponents: []
+    m_AddedComponents:
+    - targetCorrespondingSourceObject: {fileID: 4552636238606994245, guid: 7cb5d1e734ae39d43965ca06e207a0b2, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 925312983041519893}
   m_SourcePrefab: {fileID: 100100000, guid: 7cb5d1e734ae39d43965ca06e207a0b2, type: 3}
 --- !u!1 &925312983041519887 stripped
 GameObject:
   m_CorrespondingSourceObject: {fileID: 4552636238606994245, guid: 7cb5d1e734ae39d43965ca06e207a0b2, type: 3}
   m_PrefabInstance: {fileID: 925312983041519886}
   m_PrefabAsset: {fileID: 0}
+--- !u!114 &925312983041519888 stripped
+MonoBehaviour:
+  m_CorrespondingSourceObject: {fileID: 5358637263508474803, guid: 7cb5d1e734ae39d43965ca06e207a0b2, type: 3}
+  m_PrefabInstance: {fileID: 925312983041519886}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 59df5feb924f1ad4eb96c9b6961a3955, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
 --- !u!114 &925312983041519891 stripped
 MonoBehaviour:
   m_CorrespondingSourceObject: {fileID: 5680480563071017053, guid: 7cb5d1e734ae39d43965ca06e207a0b2, type: 3}
@@ -8542,6 +8710,40 @@ Transform:
   m_CorrespondingSourceObject: {fileID: 5614137139763388683, guid: 7cb5d1e734ae39d43965ca06e207a0b2, type: 3}
   m_PrefabInstance: {fileID: 925312983041519886}
   m_PrefabAsset: {fileID: 0}
+--- !u!114 &925312983041519893
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 925312983041519887}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f3851bd2e5e07da4987cb5dfe8a79763, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  robotId: 0
+  robotControllerComponent: {fileID: 0}
+  suctionGripper: {fileID: 0}
+  colorSensor: {fileID: 0}
+  colorArea: {fileID: 0}
+  poseProviderComponent: {fileID: 0}
+  palletizerComponent: {fileID: 0}
+  colorClassifierComponent: {fileID: 0}
+  lockManagerComponent: {fileID: 0}
+  pathPlannerComponent: {fileID: 0}
+  telemetryLoggerComponent: {fileID: 0}
+  moveTimeoutSec: 15
+  lockTimeoutSec: 5
+  gripReadyTimeoutSec: 3
+  gripRetryWaitSec: 0.2
+  gripRetryCount: 1
+  colorRetryWaitSec: 0.1
+  colorRetryCount: 1
+  logWithoutTelemetry: 1
+  debugConveyorId: 1
+  debugTaskId: 9001
+  logDebugMissionResult: 1
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0
@@ -8569,4 +8771,3 @@ SceneRoots:
   - {fileID: 925312983041519886}
   - {fileID: 1719549879}
   - {fileID: 2140976383}
-  - {fileID: 1922054703}
