@@ -39,6 +39,11 @@ namespace CPS.ICPBL.Student
         [Header("Debug")]
         [SerializeField] private bool logWithoutTelemetry = true;
 
+        [Header("Manual Test")]
+        [SerializeField] private int debugConveyorId = StudentConstants.MinConveyorId;
+        [SerializeField] private int debugTaskId = 9001;
+        [SerializeField] private bool logDebugMissionResult = true;
+
         private IRobotController robotController;
         private IPoseProvider poseProvider;
         private IPalletizer palletizer;
@@ -80,6 +85,11 @@ namespace CPS.ICPBL.Student
             gripRetryCount = Mathf.Max(0, gripRetryCount);
             colorRetryWaitSec = Mathf.Max(0f, colorRetryWaitSec);
             colorRetryCount = Mathf.Max(0, colorRetryCount);
+            debugConveyorId = Mathf.Clamp(
+                debugConveyorId,
+                StudentConstants.MinConveyorId,
+                StudentConstants.MaxConveyorId);
+            debugTaskId = Mathf.Max(1, debugTaskId);
         }
 
         public void Configure(
@@ -204,6 +214,63 @@ namespace CPS.ICPBL.Student
 
             ResolveSerializedReferences();
             activeMission = StartCoroutine(RunMission(request, onFinished));
+        }
+
+        [ContextMenu("RobotAgent/Start Debug Mission")]
+        private void StartDebugMission()
+        {
+            if (!Application.isPlaying)
+            {
+                Debug.LogWarning("[RobotAgent] Debug mission can only run in Play Mode.", this);
+                return;
+            }
+
+            if (!CanAcceptTask)
+            {
+                Debug.LogWarning("[RobotAgent] Debug mission ignored because robot is busy.", this);
+                return;
+            }
+
+            if (!StudentConstants.IsConveyorId(debugConveyorId))
+            {
+                Debug.LogWarningFormat(
+                    this,
+                    "[RobotAgent] Invalid debug conveyor id={0}.",
+                    debugConveyorId);
+                return;
+            }
+
+            ResolveSerializedReferences();
+            var request = new MissionRequest
+            {
+                taskId = debugTaskId,
+                robotId = robotId,
+                conveyorId = debugConveyorId,
+                requestTime = Time.time,
+                timeoutSec = StudentConstants.DefaultMissionTimeoutSec
+            };
+
+            StartMission(request, LogDebugMissionResult);
+        }
+
+        private void LogDebugMissionResult(MissionResult result)
+        {
+            if (!logDebugMissionResult || result == null)
+            {
+                return;
+            }
+
+            Debug.LogFormat(
+                this,
+                "[RobotAgent] Debug mission result task={0} robot={1} conveyor={2} success={3} class={4} destination={5} reason={6} message={7}",
+                result.taskId,
+                result.robotId,
+                result.conveyorId,
+                result.success,
+                result.classificationResult,
+                result.destinationStationId,
+                result.failureReason,
+                result.message);
         }
 
         private IEnumerator RunMission(MissionRequest request, Action<MissionResult> onFinished)
