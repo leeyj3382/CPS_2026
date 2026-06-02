@@ -89,6 +89,32 @@ GripperAdapter.cs
 - `MissionResult`가 success/failure reason을 포함해 Fleet로 반환된다.
 - 실패/timeout 경로에서 lock과 slot reservation이 정리된다.
 
+## 씬 통합 전후 수동 테스트
+
+`RobotAgent`에는 Play Mode에서 실행할 수 있는 `RobotAgent/Start Debug Mission` ContextMenu가 있다. RobotA 또는 RobotB의 `RobotAgent`에 필요한 참조가 연결된 뒤, Inspector의 component 메뉴에서 실행하면 `debugConveyorId` 기준으로 단일 `MissionRequest`를 바로 보낸다.
+
+테스트 전에 연결해야 하는 참조:
+
+- robot별 `IRobotController`
+- robot별 `SuctionGripper`
+- robot별 `ColorSensor` 또는 `ColorArea`
+- `IPoseProvider`
+- `IPalletizer`
+- `IColorClassifier`
+- `IResourceLockManager`
+- `IPathPlanner`
+- 선택 사항: `ITelemetryLogger`
+
+성공 확인 순서:
+
+1. conveyor station으로 이동한다.
+2. pick `approachPos -> actionPos -> retractPos`가 순서대로 실행된다.
+3. `TryGrip()` 후 `IsHolding == true`가 된다.
+4. 색상 분류 결과가 Normal 또는 Abnormal로 확정된다.
+5. station `100` 또는 `101`로 이동한다.
+6. slot place 후 `Release()`로 `IsHolding == false`가 된다.
+7. debug mission result 로그가 `success=True`로 출력된다.
+
 ## 주의사항
 
 - 작업 우선순위나 어떤 컨베이어를 고를지는 Fleet 담당이다.

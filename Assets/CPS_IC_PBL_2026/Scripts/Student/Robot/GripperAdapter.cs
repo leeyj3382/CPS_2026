@@ -107,20 +107,6 @@ namespace CPS.ICPBL.Student
             return true;
         }
 
-        public bool TryGripWithRetry(int retryCount, float waitBetweenRetrySec)
-        {
-            int attempts = Mathf.Max(0, retryCount) + 1;
-            for (int attempt = 0; attempt < attempts; attempt++)
-            {
-                if (TryGrip(out _))
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
         public void Release()
         {
             if (gripper == null)
