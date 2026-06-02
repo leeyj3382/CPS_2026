@@ -51,6 +51,21 @@ namespace CPS.ICPBL.Student
         bool RequiresCentralZone(int robotId, int fromStationId, int toStationId);
     }
 
+    public interface IPathReservationManager
+    {
+        bool TryReserveBaseSegment(
+            int robotId,
+            int taskId,
+            Vector3 from,
+            Vector3 to,
+            float priority,
+            out PathReservationToken token,
+            out int blockingRobotId,
+            out int blockingTaskId);
+
+        void ReleaseBaseSegment(PathReservationToken token);
+    }
+
     public interface ITelemetryLogger
     {
         void LogTaskCreated(WorkTask task);

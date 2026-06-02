@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using CPS.ICPBL.Common;
+using CPS.ICPBL.Environment;
 using UnityEngine;
 
 namespace CPS.ICPBL.Student
@@ -19,6 +20,8 @@ namespace CPS.ICPBL.Student
             public IColorClassifier ColorClassifier;
             public IResourceLockManager LockManager;
             public IPathPlanner PathPlanner;
+            public IPathReservationManager PathReservationManager;
+            public OperatingStations OperatingStations;
             public ITelemetryLogger TelemetryLogger;
             public Func<int> GetCurrentStationId;
             public Action<int> SetCurrentStationId;
@@ -34,6 +37,15 @@ namespace CPS.ICPBL.Student
             public int GripRetryCount = 1;
             public float ColorRetryWaitSec = 0.1f;
             public int ColorRetryCount = 1;
+            public float PayloadLockWaitLogIntervalSec = 2f;
+            public float PathReservationLogIntervalSec = 1f;
+            public float PayloadPathPriorityBonus = 1000f;
+            public float TaskAgePriorityScale = 0.01f;
+            public float PathYieldWaitSec = 2f;
+            public float PathYieldDistance = 3f;
+            public float PathYieldMoveTimeoutSec = 6f;
+            public float PathYieldCooldownSec = 1.5f;
+            public int PathYieldMaxAttempts = 3;
         }
 
         private sealed class MissionContext
@@ -46,6 +58,10 @@ namespace CPS.ICPBL.Student
             public bool Failed;
             public bool SlotReserved;
             public bool SlotCommitted;
+            public bool PayloadSecured;
+            public bool ConveyorPickReported;
+            public float NextPathYieldAt;
+            public int PathYieldAttempts;
             public BoxSlotPose ReservedSlot;
             public BoxType DestinationBoxType;
             public ColorClassificationResult Classification;
@@ -121,10 +137,14 @@ namespace CPS.ICPBL.Student
 
             if (!context.Failed)
             {
-                yield return RunClassification(context);
+                ReleaseKey(context, conveyorKey);
+                ReportConveyorPicked(context);
             }
 
-            ReleaseKey(context, conveyorKey);
+            if (!context.Failed)
+            {
+                yield return RunClassification(context);
+            }
 
             if (!context.Failed)
             {
@@ -132,7 +152,6 @@ namespace CPS.ICPBL.Student
                     StudentConstants.GetBoxLockType(context.DestinationBoxType),
                     context.Result.destinationStationId);
 
-                yield return AcquireCentralZoneIfNeeded(context, context.Result.destinationStationId);
                 if (!context.Failed)
                 {
                     yield return AcquireLock(
@@ -140,6 +159,11 @@ namespace CPS.ICPBL.Student
                         boxKey,
                         MissionFailureReason.BoxLockFailed,
                         "box lock");
+                }
+
+                if (!context.Failed)
+                {
+                    yield return AcquireCentralZoneIfNeeded(context, context.Result.destinationStationId);
                 }
 
                 if (!context.Failed)
@@ -249,10 +273,6 @@ namespace CPS.ICPBL.Student
             int fromStationId = dependencies.GetCurrentStationId != null
                 ? dependencies.GetCurrentStationId()
                 : StudentConstants.NoStationId;
-            if (fromStationId == StudentConstants.NoStationId)
-            {
-                yield break;
-            }
 
             if (!dependencies.PathPlanner.RequiresCentralZone(
                 context.Request.robotId,
@@ -286,6 +306,8 @@ namespace CPS.ICPBL.Student
 
             dependencies.SetState?.Invoke(RobotRuntimeState.WaitingForLock);
             float deadline = Time.time + Mathf.Max(0f, settings.LockTimeoutSec);
+            float nextPayloadWaitLogAt = Time.time
+                + Mathf.Max(0.1f, settings.PayloadLockWaitLogIntervalSec);
             while (Time.time <= deadline)
             {
                 if (dependencies.LockManager.TryAcquire(
@@ -306,6 +328,38 @@ namespace CPS.ICPBL.Student
                 yield return null;
             }
 
+            while (context.PayloadSecured)
+            {
+                if (dependencies.LockManager.TryAcquire(
+                    key,
+                    context.Request.robotId,
+                    context.Request.taskId,
+                    out ResourceLockToken token))
+                {
+                    context.LockTokens.Add(token);
+                    dependencies.TelemetryLogger?.LogLock(
+                        "Acquire",
+                        key,
+                        context.Request.robotId,
+                        context.Request.taskId);
+                    yield break;
+                }
+
+                if (Time.time >= nextPayloadWaitLogAt)
+                {
+                    nextPayloadWaitLogAt = Time.time
+                        + Mathf.Max(0.1f, settings.PayloadLockWaitLogIntervalSec);
+                    LogMessage("Lock", string.Format(
+                        "Task={0} robot={1} is holding payload; continuing to wait for {2}: {3}.",
+                        context.Request.taskId,
+                        context.Request.robotId,
+                        label,
+                        key));
+                }
+
+                yield return null;
+            }
+
             dependencies.TelemetryLogger?.LogLock(
                 "Timeout",
                 key,
@@ -321,13 +375,270 @@ namespace CPS.ICPBL.Student
             string label)
         {
             dependencies.SetState?.Invoke(state);
-            dependencies.Controller.GoToOperatingStation(stationId);
-            yield return WaitForControllerIdle(context, settings.MoveTimeoutSec, label);
+            yield return MoveBaseToStation(context, stationId, label);
 
             if (!context.Failed)
             {
                 dependencies.SetCurrentStationId?.Invoke(stationId);
             }
+        }
+
+        private IEnumerator MoveBaseToStation(
+            MissionContext context,
+            int stationId,
+            string label)
+        {
+            PathReservationToken reservationToken = null;
+            OperatingStations.Station targetStation = default;
+            bool hasStationPosition = false;
+            if (dependencies.OperatingStations != null)
+            {
+                hasStationPosition = dependencies.OperatingStations.TryGetStation(
+                    stationId,
+                    out targetStation);
+            }
+
+            if (hasStationPosition)
+            {
+                Vector3 from = dependencies.Controller.Position;
+                Vector3 to = targetStation.BasePosition;
+                yield return ReserveBaseSegment(context, from, to, label, token => reservationToken = token);
+                if (context.Failed)
+                {
+                    ReleaseBaseSegment(reservationToken);
+                    yield break;
+                }
+            }
+
+            dependencies.Controller.GoToOperatingStation(stationId);
+            yield return WaitForControllerIdle(context, settings.MoveTimeoutSec, label);
+
+            ReleaseBaseSegment(reservationToken);
+        }
+
+        private IEnumerator ReserveBaseSegment(
+            MissionContext context,
+            Vector3 from,
+            Vector3 to,
+            string label,
+            Action<PathReservationToken> onReserved)
+        {
+            if (dependencies.PathReservationManager == null)
+            {
+                yield break;
+            }
+
+            Vector3 currentFrom = from;
+            float nextLogAt = Time.time;
+            float waitStartedAt = Time.time;
+            while (true)
+            {
+                currentFrom = dependencies.Controller.Position;
+                float priority = CalculatePathPriority(context);
+                if (dependencies.PathReservationManager.TryReserveBaseSegment(
+                    context.Request.robotId,
+                    context.Request.taskId,
+                    currentFrom,
+                    to,
+                    priority,
+                    out PathReservationToken token,
+                    out int blockingRobotId,
+                    out int blockingTaskId))
+                {
+                    onReserved?.Invoke(token);
+                    yield break;
+                }
+
+                if (ShouldYieldFromBlockedPath(context, waitStartedAt))
+                {
+                    bool yielded = false;
+                    yield return TryYieldFromBlockedPath(
+                        context,
+                        currentFrom,
+                        to,
+                        label,
+                        value => yielded = value);
+
+                    currentFrom = dependencies.Controller.Position;
+                    waitStartedAt = Time.time;
+                    if (context.Failed)
+                    {
+                        yield break;
+                    }
+
+                    if (yielded)
+                    {
+                        continue;
+                    }
+                }
+
+                if (Time.time >= nextLogAt)
+                {
+                    nextLogAt = Time.time
+                        + Mathf.Max(0.1f, settings.PathReservationLogIntervalSec);
+                    LogMessage("Path", string.Format(
+                        "Robot={0} task={1} waiting for safe base segment {2}; blockedBy robot={3} task={4}.",
+                        context.Request.robotId,
+                        context.Request.taskId,
+                        label,
+                        blockingRobotId,
+                        blockingTaskId));
+                }
+
+                yield return null;
+            }
+        }
+
+        private bool ShouldYieldFromBlockedPath(MissionContext context, float waitStartedAt)
+        {
+            if (context.PayloadSecured)
+            {
+                return false;
+            }
+
+            if (context.PathYieldAttempts >= Mathf.Max(0, settings.PathYieldMaxAttempts))
+            {
+                return false;
+            }
+
+            if (Time.time < context.NextPathYieldAt)
+            {
+                return false;
+            }
+
+            return Time.time - waitStartedAt >= Mathf.Max(0.1f, settings.PathYieldWaitSec);
+        }
+
+        private IEnumerator TryYieldFromBlockedPath(
+            MissionContext context,
+            Vector3 from,
+            Vector3 originalTarget,
+            string label,
+            Action<bool> onYielded)
+        {
+            context.NextPathYieldAt = Time.time + Mathf.Max(0.1f, settings.PathYieldCooldownSec);
+            Vector3[] candidates = BuildYieldCandidates(context, from, originalTarget);
+
+            for (int i = 0; i < candidates.Length; i++)
+            {
+                Vector3 candidate = candidates[i];
+                if (Vector3.Distance(from, candidate) <= 0.2f)
+                {
+                    continue;
+                }
+
+                float priority = CalculatePathPriority(context);
+                if (!dependencies.PathReservationManager.TryReserveBaseSegment(
+                    context.Request.robotId,
+                    context.Request.taskId,
+                    from,
+                    candidate,
+                    priority,
+                    out PathReservationToken yieldToken,
+                    out int blockingRobotId,
+                    out int blockingTaskId))
+                {
+                    LogMessage("Path", string.Format(
+                        "Yield candidate blocked robot={0} task={1} label={2}; blockedBy robot={3} task={4}.",
+                        context.Request.robotId,
+                        context.Request.taskId,
+                        label,
+                        blockingRobotId,
+                        blockingTaskId));
+                    continue;
+                }
+
+                context.PathYieldAttempts++;
+                LogMessage("Path", string.Format(
+                    "Yield robot={0} task={1} label={2} to=({3:0.0},{4:0.0}) attempt={5}.",
+                    context.Request.robotId,
+                    context.Request.taskId,
+                    label,
+                    candidate.x,
+                    candidate.z,
+                    context.PathYieldAttempts));
+
+                dependencies.Controller.MoveBaseTo(candidate);
+                yield return WaitForControllerIdle(
+                    context,
+                    Mathf.Max(0.1f, settings.PathYieldMoveTimeoutSec),
+                    string.Format("path yield before {0}", label));
+                ReleaseBaseSegment(yieldToken);
+
+                if (!context.Failed)
+                {
+                    onYielded?.Invoke(true);
+                }
+
+                yield break;
+            }
+
+            LogMessage("Path", string.Format(
+                "No safe yield candidate robot={0} task={1} label={2}.",
+                context.Request.robotId,
+                context.Request.taskId,
+                label));
+            onYielded?.Invoke(false);
+        }
+
+        private Vector3[] BuildYieldCandidates(
+            MissionContext context,
+            Vector3 from,
+            Vector3 originalTarget)
+        {
+            float distance = Mathf.Max(0.5f, settings.PathYieldDistance);
+            Vector3 direction = FlattenXZ(originalTarget - from);
+            if (direction.sqrMagnitude <= 0.0001f)
+            {
+                direction = Vector3.forward;
+            }
+
+            direction.Normalize();
+            Vector3 perpendicular = new Vector3(-direction.z, 0f, direction.x);
+            if (context.Request.robotId == StudentConstants.RobotBId)
+            {
+                perpendicular = -perpendicular;
+            }
+
+            Vector3 backward = -direction;
+            Vector3 diagonalA = (perpendicular + backward).normalized;
+            Vector3 diagonalB = (-perpendicular + backward).normalized;
+
+            return new[]
+            {
+                ClampYieldCandidate(from + perpendicular * distance),
+                ClampYieldCandidate(from - perpendicular * distance),
+                ClampYieldCandidate(from + backward * distance),
+                ClampYieldCandidate(from + diagonalA * distance),
+                ClampYieldCandidate(from + diagonalB * distance)
+            };
+        }
+
+        private static Vector3 FlattenXZ(Vector3 value)
+        {
+            value.y = 0f;
+            return value;
+        }
+
+        private static Vector3 ClampYieldCandidate(Vector3 value)
+        {
+            value.x = Mathf.Clamp(value.x, -9.5f, 10.5f);
+            value.z = Mathf.Clamp(value.z, -8.0f, 11.5f);
+            return value;
+        }
+
+        private float CalculatePathPriority(MissionContext context)
+        {
+            float priority = context.PayloadSecured ? settings.PayloadPathPriorityBonus : 0f;
+            priority += Mathf.Max(0f, Time.time - context.Request.requestTime)
+                * Mathf.Max(0f, settings.TaskAgePriorityScale);
+            priority -= context.Request.robotId * 0.001f;
+            return priority;
+        }
+
+        private void ReleaseBaseSegment(PathReservationToken token)
+        {
+            dependencies.PathReservationManager?.ReleaseBaseSegment(token);
         }
 
         private IEnumerator RunPickSequence(MissionContext context)
@@ -378,6 +689,48 @@ namespace CPS.ICPBL.Student
             ReleaseKey(context, armKey);
         }
 
+        private void ReportConveyorPicked(MissionContext context)
+        {
+            if (context.ConveyorPickReported)
+            {
+                return;
+            }
+
+            context.ConveyorPickReported = true;
+            NotifyProgress(context, MissionProgressType.ConveyorPicked);
+        }
+
+        private void NotifyProgress(MissionContext context, MissionProgressType type)
+        {
+            if (context.Request?.onProgress == null)
+            {
+                return;
+            }
+
+            var progress = new MissionProgressEvent
+            {
+                taskId = context.Request.taskId,
+                robotId = context.Request.robotId,
+                conveyorId = context.Request.conveyorId,
+                type = type,
+                occurredAt = Time.time
+            };
+
+            try
+            {
+                context.Request.onProgress(progress);
+            }
+            catch (Exception exception)
+            {
+                LogMessage("Mission", string.Format(
+                    "Progress callback failed task={0} robot={1} type={2}: {3}",
+                    context.Request.taskId,
+                    context.Request.robotId,
+                    type,
+                    exception.Message));
+            }
+        }
+
         private IEnumerator GripWithRetry(MissionContext context)
         {
             int attempts = Mathf.Max(0, settings.GripRetryCount) + 1;
@@ -386,6 +739,7 @@ namespace CPS.ICPBL.Student
                 yield return dependencies.Gripper.WaitUntilGraspReady(settings.GripReadyTimeoutSec);
                 if (dependencies.Gripper.TryGrip(out string reason))
                 {
+                    context.PayloadSecured = true;
                     LogMessage("Grip", string.Format(
                         "Grip success task={0} robot={1} attempt={2}.",
                         context.Request.taskId,
@@ -517,6 +871,7 @@ namespace CPS.ICPBL.Student
                 yield break;
             }
 
+            context.PayloadSecured = false;
             dependencies.Palletizer.CommitSlot(context.Request.taskId);
             context.SlotCommitted = true;
 
@@ -622,6 +977,11 @@ namespace CPS.ICPBL.Student
             }
 
             ReleaseAllLocks(context);
+            if (context.Failed && context.PayloadSecured && !context.ConveyorPickReported)
+            {
+                ReportConveyorPicked(context);
+            }
+
             context.Result.finishedAt = Time.time;
             onFinished?.Invoke(context.Result);
         }
@@ -637,10 +997,9 @@ namespace CPS.ICPBL.Student
             if (dependencies.Gripper != null && dependencies.Gripper.IsHolding)
             {
                 LogMessage("Grip", string.Format(
-                    "Emergency release after mission failure task={0} robot={1}.",
+                    "Mission failed while holding payload task={0} robot={1}; keeping gripper closed to avoid dropping object in mid-air.",
                     context.Request.taskId,
                     context.Request.robotId));
-                dependencies.Gripper.Release();
             }
         }
 

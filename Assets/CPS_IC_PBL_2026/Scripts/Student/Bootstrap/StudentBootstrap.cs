@@ -30,6 +30,8 @@ namespace CPS.ICPBL.Student
                 return;
             }
 
+            ConfigurePathPlanner();
+
             ConfigureRobot(
                 "RobotA",
                 sceneReferences.RobotAAgent,
@@ -48,6 +50,17 @@ namespace CPS.ICPBL.Student
 
             ConfigureDeadlockGuard();
             ConfigureFleet();
+        }
+
+        private void ConfigurePathPlanner()
+        {
+            if (sceneReferences.PathPlanner is PathPlanner planner)
+            {
+                planner.ConfigureRobots(
+                    sceneReferences.RobotAController,
+                    sceneReferences.RobotBController,
+                    sceneReferences.TelemetryLogger);
+            }
         }
 
         private void ConfigureRobot(
@@ -79,7 +92,8 @@ namespace CPS.ICPBL.Student
                 sceneReferences.ColorClassifier,
                 sceneReferences.ResourceLockManager,
                 sceneReferences.PathPlanner,
-                sceneReferences.TelemetryLogger);
+                sceneReferences.TelemetryLogger,
+                sceneReferences.OperatingStations);
         }
 
         private void ConfigureFleet()
