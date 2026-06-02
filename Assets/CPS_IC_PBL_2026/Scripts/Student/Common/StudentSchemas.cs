@@ -151,4 +151,16 @@ namespace CPS.ICPBL.Student
         public int taskId;
         public float acquiredAt;
     }
+
+    [Serializable]
+    public class PathReservationToken
+    {
+        public int robotId;
+        public int taskId;
+        public Vector3 from;
+        public Vector3 to;
+        public float priority;
+        public float acquiredAt;
+        public float expiresAt;
+    }
 }
