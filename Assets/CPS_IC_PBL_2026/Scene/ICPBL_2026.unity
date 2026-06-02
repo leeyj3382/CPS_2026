@@ -8638,7 +8638,7 @@ PrefabInstance:
     - target: {fileID: 5680480563071017053, guid: 7cb5d1e734ae39d43965ca06e207a0b2, type: 3}
       propertyPath: stations
       value: 
-      objectReference: {fileID: 0}
+      objectReference: {fileID: 11400000, guid: 667bb907820e74b4f8756d19fbc1c215, type: 2}
     - target: {fileID: 5680480563071017053, guid: 7cb5d1e734ae39d43965ca06e207a0b2, type: 3}
       propertyPath: normalBox
       value: 
