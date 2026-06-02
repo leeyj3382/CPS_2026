@@ -10,6 +10,7 @@ namespace CPS.ICPBL.Student
         {
             public ResourceLockToken Token;
             public float LastWarningAt;
+            public float LastAcquireFailureWarningAt = float.NegativeInfinity;
         }
 
         [Header("Diagnostics")]
@@ -33,13 +34,7 @@ namespace CPS.ICPBL.Student
 
             if (locks.TryGetValue(key, out LockRecord existing))
             {
-                Warn(string.Format(
-                    "Acquire failed key={0} requestedBy robot={1} task={2}; heldBy robot={3} task={4}.",
-                    key,
-                    robotId,
-                    taskId,
-                    existing.Token.robotId,
-                    existing.Token.taskId));
+                WarnAcquireFailure(existing, key, robotId, taskId);
                 return false;
             }
 
@@ -162,6 +157,27 @@ namespace CPS.ICPBL.Student
                 && left.robotId == right.robotId
                 && left.taskId == right.taskId
                 && Mathf.Approximately(left.acquiredAt, right.acquiredAt);
+        }
+
+        private void WarnAcquireFailure(
+            LockRecord existing,
+            ResourceKey key,
+            int robotId,
+            int taskId)
+        {
+            if (existing == null || Time.time - existing.LastAcquireFailureWarningAt < warningIntervalSec)
+            {
+                return;
+            }
+
+            existing.LastAcquireFailureWarningAt = Time.time;
+            Warn(string.Format(
+                "Acquire failed key={0} requestedBy robot={1} task={2}; heldBy robot={3} task={4}.",
+                key,
+                robotId,
+                taskId,
+                existing.Token.robotId,
+                existing.Token.taskId));
         }
 
         private void Warn(string message)
