@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using CPS.ICPBL.Common;
 using UnityEngine;
 
@@ -49,6 +50,17 @@ namespace CPS.ICPBL.Student
     public interface IPathPlanner
     {
         bool RequiresCentralZone(int robotId, int fromStationId, int toStationId);
+        IReadOnlyList<Vector3> BuildBaseRoute(
+            int robotId,
+            int fromStationId,
+            int toStationId,
+            Vector3 from,
+            Vector3 to);
+
+        IReadOnlyList<Vector3> BuildYieldCandidates(
+            int robotId,
+            Vector3 from,
+            Vector3 originalTarget);
     }
 
     public interface IPathReservationManager

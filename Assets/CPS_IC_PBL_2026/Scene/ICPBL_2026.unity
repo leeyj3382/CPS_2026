@@ -7908,6 +7908,7 @@ MonoBehaviour:
   colorClassifierComponent: {fileID: 0}
   lockManagerComponent: {fileID: 0}
   pathPlannerComponent: {fileID: 0}
+  operatingStations: {fileID: 0}
   telemetryLoggerComponent: {fileID: 0}
   moveTimeoutSec: 15
   lockTimeoutSec: 5
@@ -8323,6 +8324,7 @@ MonoBehaviour:
   runAutomatically: 1
   enableDistanceTieBreaker: 0
   logEventsWithoutTelemetry: 1
+  postPickConveyorCooldownSec: 1.1
 --- !u!114 &2140976385
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -8351,8 +8353,10 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 0f14d90eab5340cc8cf0a883cb39ce81, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  robotAgents: []
-  telemetryLoggerComponent: {fileID: 0}
+  robotAgents:
+  - {fileID: 925312983041519893}
+  - {fileID: 1993300479}
+  telemetryLoggerComponent: {fileID: 2140976385}
   enableDiagnostics: 1
   waitingWarningSec: 5
   warningIntervalSec: 2
@@ -8373,8 +8377,24 @@ MonoBehaviour:
   robotAMaxConveyor: 5
   robotBMinConveyor: 6
   robotBMaxConveyor: 10
+  requireCentralZoneForUnknownStation: 1
   requireCentralZoneForCrossSideMove: 1
   requireCentralZoneForBoxAccess: 1
+  enableSegmentReservation: 1
+  segmentClearanceRadius: 1.8
+  stationaryClearanceRadius: 1.6
+  reservationStaleSec: 8
+  enableLaneRouting: 1
+  robotALaneX: -7.2
+  robotBLaneX: 7.2
+  lowerLaneZ: -7.4
+  upperLaneZ: 9.3
+  waypointMergeDistance: 0.6
+  detourDistance: 3
+  worldMinX: -9.5
+  worldMaxX: 10.5
+  worldMinZ: -8
+  worldMaxZ: 11.5
 --- !u!114 &2140976388
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -8732,6 +8752,7 @@ MonoBehaviour:
   colorClassifierComponent: {fileID: 0}
   lockManagerComponent: {fileID: 0}
   pathPlannerComponent: {fileID: 0}
+  operatingStations: {fileID: 0}
   telemetryLoggerComponent: {fileID: 0}
   moveTimeoutSec: 15
   lockTimeoutSec: 5

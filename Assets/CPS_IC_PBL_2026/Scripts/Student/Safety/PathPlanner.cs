@@ -20,12 +20,28 @@ namespace CPS.ICPBL.Student
 
         [Header("Base Segment Reservation")]
         [SerializeField] private bool enableSegmentReservation = true;
-        [SerializeField, Min(0.1f)] private float segmentClearanceRadius = 2.4f;
-        [SerializeField, Min(0.1f)] private float stationaryClearanceRadius = 2.2f;
+        [SerializeField, Min(0.1f)] private float segmentClearanceRadius = 1.8f;
+        [SerializeField, Min(0.1f)] private float stationaryClearanceRadius = 1.6f;
         [SerializeField, Min(0.1f)] private float reservationStaleSec = 8f;
+
+        [Header("Lane Routing")]
+        [SerializeField] private bool enableLaneRouting = true;
+        [SerializeField] private float robotALaneX = -7.2f;
+        [SerializeField] private float robotBLaneX = 7.2f;
+        [SerializeField] private float lowerLaneZ = -7.4f;
+        [SerializeField] private float upperLaneZ = 9.3f;
+        [SerializeField] private float waypointMergeDistance = 0.6f;
+        [SerializeField] private float detourDistance = 3f;
+        [SerializeField] private float worldMinX = -9.5f;
+        [SerializeField] private float worldMaxX = 10.5f;
+        [SerializeField] private float worldMinZ = -8.0f;
+        [SerializeField] private float worldMaxZ = 11.5f;
 
         private readonly List<PathReservationToken> activeReservations =
             new List<PathReservationToken>();
+
+        private readonly List<Vector3> reusableRoute = new List<Vector3>(5);
+        private readonly List<Vector3> reusableYieldCandidates = new List<Vector3>(6);
 
         private IRobotController[] robotControllers;
         private ITelemetryLogger telemetryLogger;
@@ -86,6 +102,68 @@ namespace CPS.ICPBL.Student
             }
 
             return false;
+        }
+
+        public IReadOnlyList<Vector3> BuildBaseRoute(
+            int robotId,
+            int fromStationId,
+            int toStationId,
+            Vector3 from,
+            Vector3 to)
+        {
+            reusableRoute.Clear();
+
+            if (!enableLaneRouting || IsNearSamePoint(from, to))
+            {
+                AddRoutePoint(to);
+                return reusableRoute;
+            }
+
+            float laneX = GetLaneX(robotId, toStationId);
+            float targetLaneZ = GetLaneZ(toStationId, to);
+
+            AddRoutePoint(new Vector3(laneX, from.y, from.z));
+            AddRoutePoint(new Vector3(laneX, from.y, targetLaneZ));
+            AddRoutePoint(new Vector3(to.x, from.y, targetLaneZ));
+            AddRoutePoint(to);
+
+            return reusableRoute;
+        }
+
+        public IReadOnlyList<Vector3> BuildYieldCandidates(
+            int robotId,
+            Vector3 from,
+            Vector3 originalTarget)
+        {
+            reusableYieldCandidates.Clear();
+
+            float distance = Mathf.Max(0.5f, detourDistance);
+            Vector3 direction = FlattenXZ(originalTarget - from);
+            if (direction.sqrMagnitude <= 0.0001f)
+            {
+                direction = Vector3.forward;
+            }
+
+            direction.Normalize();
+            Vector3 perpendicular = new Vector3(-direction.z, 0f, direction.x);
+            if (robotId == StudentConstants.RobotBId)
+            {
+                perpendicular = -perpendicular;
+            }
+
+            Vector3 backward = -direction;
+            Vector3 diagonalA = (perpendicular + backward).normalized;
+            Vector3 diagonalB = (-perpendicular + backward).normalized;
+            float laneX = GetLaneX(robotId, StudentConstants.NoStationId);
+
+            AddYieldCandidate(from + perpendicular * distance);
+            AddYieldCandidate(from - perpendicular * distance);
+            AddYieldCandidate(new Vector3(laneX, from.y, from.z));
+            AddYieldCandidate(from + backward * distance);
+            AddYieldCandidate(from + diagonalA * distance);
+            AddYieldCandidate(from + diagonalB * distance);
+
+            return reusableYieldCandidates;
         }
 
         public bool TryReserveBaseSegment(
@@ -205,6 +283,8 @@ namespace CPS.ICPBL.Student
             segmentClearanceRadius = Mathf.Max(0.1f, segmentClearanceRadius);
             stationaryClearanceRadius = Mathf.Max(0.1f, stationaryClearanceRadius);
             reservationStaleSec = Mathf.Max(0.1f, reservationStaleSec);
+            waypointMergeDistance = Mathf.Max(0.1f, waypointMergeDistance);
+            detourDistance = Mathf.Max(0.5f, detourDistance);
         }
 
         private bool IsCrossSideMove(int fromStationId, int toStationId)
@@ -271,6 +351,12 @@ namespace CPS.ICPBL.Student
                     continue;
                 }
 
+                if (DistanceXZ(to, otherPosition) > DistanceXZ(from, otherPosition)
+                    && DistanceXZ(from, otherPosition) <= stationaryClearanceRadius * 1.25f)
+                {
+                    continue;
+                }
+
                 if (PointSegmentDistanceXZ(otherPosition, from, to) <= stationaryClearanceRadius)
                 {
                     blockingRobotId = controller.RobotId;
@@ -291,6 +377,79 @@ namespace CPS.ICPBL.Student
             }
 
             return DistanceXZ(to, otherPosition) > startDistance + 0.25f;
+        }
+
+        private float GetLaneX(int robotId, int stationId)
+        {
+            if (StudentConstants.IsBoxStationId(stationId))
+            {
+                return stationId == StudentConstants.NormalBoxStationId
+                    ? robotALaneX
+                    : robotBLaneX;
+            }
+
+            return robotId == StudentConstants.RobotBId ? robotBLaneX : robotALaneX;
+        }
+
+        private float GetLaneZ(int stationId, Vector3 target)
+        {
+            if (stationId == StudentConstants.NormalBoxStationId)
+            {
+                return lowerLaneZ;
+            }
+
+            if (stationId == StudentConstants.AbnormalBoxStationId)
+            {
+                return target.z;
+            }
+
+            if (stationId >= 6 && stationId <= StudentConstants.MaxConveyorId)
+            {
+                return upperLaneZ;
+            }
+
+            return target.z;
+        }
+
+        private void AddRoutePoint(Vector3 point)
+        {
+            point = ClampToWorld(point);
+
+            if (reusableRoute.Count > 0
+                && DistanceXZ(reusableRoute[reusableRoute.Count - 1], point) <= waypointMergeDistance)
+            {
+                return;
+            }
+
+            reusableRoute.Add(point);
+        }
+
+        private void AddYieldCandidate(Vector3 point)
+        {
+            point = ClampToWorld(point);
+
+            for (int i = 0; i < reusableYieldCandidates.Count; i++)
+            {
+                if (DistanceXZ(reusableYieldCandidates[i], point) <= waypointMergeDistance)
+                {
+                    return;
+                }
+            }
+
+            reusableYieldCandidates.Add(point);
+        }
+
+        private Vector3 ClampToWorld(Vector3 value)
+        {
+            value.x = Mathf.Clamp(value.x, worldMinX, worldMaxX);
+            value.z = Mathf.Clamp(value.z, worldMinZ, worldMaxZ);
+            return value;
+        }
+
+        private static Vector3 FlattenXZ(Vector3 value)
+        {
+            value.y = 0f;
+            return value;
         }
 
         private bool SegmentsConflict(

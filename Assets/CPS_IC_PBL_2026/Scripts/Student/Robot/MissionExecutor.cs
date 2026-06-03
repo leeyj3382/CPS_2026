@@ -398,22 +398,68 @@ namespace CPS.ICPBL.Student
                     out targetStation);
             }
 
-            if (hasStationPosition)
+            if (!hasStationPosition)
             {
-                Vector3 from = dependencies.Controller.Position;
-                Vector3 to = targetStation.BasePosition;
-                yield return ReserveBaseSegment(context, from, to, label, token => reservationToken = token);
+                dependencies.Controller.GoToOperatingStation(stationId);
+                yield return WaitForControllerIdle(context, settings.MoveTimeoutSec, label);
+                yield break;
+            }
+
+            IReadOnlyList<Vector3> route = dependencies.PathPlanner != null
+                ? dependencies.PathPlanner.BuildBaseRoute(
+                    context.Request.robotId,
+                    dependencies.GetCurrentStationId != null
+                        ? dependencies.GetCurrentStationId()
+                        : StudentConstants.NoStationId,
+                    stationId,
+                    dependencies.Controller.Position,
+                    targetStation.BasePosition)
+                : null;
+
+            if (route == null || route.Count == 0)
+            {
+                route = new[] { targetStation.BasePosition };
+            }
+
+            for (int i = 0; i < route.Count; i++)
+            {
+                Vector3 waypoint = route[i];
+                bool isFinalWaypoint = i == route.Count - 1;
+                yield return MoveBaseToWaypoint(
+                    context,
+                    waypoint,
+                    label,
+                    isFinalWaypoint
+                        ? () => dependencies.Controller.GoToOperatingStation(stationId)
+                        : () => dependencies.Controller.MoveBaseTo(waypoint),
+                    token => reservationToken = token);
+
+                ReleaseBaseSegment(reservationToken);
+                reservationToken = null;
+
                 if (context.Failed)
                 {
-                    ReleaseBaseSegment(reservationToken);
                     yield break;
                 }
             }
+        }
 
-            dependencies.Controller.GoToOperatingStation(stationId);
+        private IEnumerator MoveBaseToWaypoint(
+            MissionContext context,
+            Vector3 waypoint,
+            string label,
+            Action moveCommand,
+            Action<PathReservationToken> onReserved)
+        {
+            Vector3 from = dependencies.Controller.Position;
+            yield return ReserveBaseSegment(context, from, waypoint, label, onReserved);
+            if (context.Failed)
+            {
+                yield break;
+            }
+
+            moveCommand?.Invoke();
             yield return WaitForControllerIdle(context, settings.MoveTimeoutSec, label);
-
-            ReleaseBaseSegment(reservationToken);
         }
 
         private IEnumerator ReserveBaseSegment(
@@ -517,9 +563,14 @@ namespace CPS.ICPBL.Student
             Action<bool> onYielded)
         {
             context.NextPathYieldAt = Time.time + Mathf.Max(0.1f, settings.PathYieldCooldownSec);
-            Vector3[] candidates = BuildYieldCandidates(context, from, originalTarget);
+            IReadOnlyList<Vector3> candidates = dependencies.PathPlanner != null
+                ? dependencies.PathPlanner.BuildYieldCandidates(
+                    context.Request.robotId,
+                    from,
+                    originalTarget)
+                : BuildYieldCandidates(context, from, originalTarget);
 
-            for (int i = 0; i < candidates.Length; i++)
+            for (int i = 0; i < candidates.Count; i++)
             {
                 Vector3 candidate = candidates[i];
                 if (Vector3.Distance(from, candidate) <= 0.2f)
