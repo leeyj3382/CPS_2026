@@ -3,6 +3,8 @@ using System.Collections;
 using System.Collections.Generic;
 using CPS.ICPBL.Common;
 using CPS.ICPBL.Environment;
+using CPS.ICPBL.Robots;
+using CPS.Lab10.UR5e;
 using UnityEngine;
 
 namespace CPS.ICPBL.Student
@@ -46,6 +48,10 @@ namespace CPS.ICPBL.Student
             public float PathYieldMoveTimeoutSec = 6f;
             public float PathYieldCooldownSec = 1.5f;
             public int PathYieldMaxAttempts = 3;
+            public bool UseBoxFinePositioning = true;
+            public Vector3 NormalBoxFineBasePosition = new Vector3(0f, 0f, -7f);
+            public Vector3 AbnormalBoxFineBasePosition = new Vector3(9f, 0f, 2.5f);
+            public float BoxFineMoveTimeoutSec = 6f;
         }
 
         private sealed class MissionContext
@@ -178,6 +184,11 @@ namespace CPS.ICPBL.Student
                 ReleaseKey(context, new ResourceKey(
                     LockResourceType.CentralZone,
                     StudentConstants.CentralZoneResourceId));
+
+                if (!context.Failed)
+                {
+                    yield return MoveToBoxFinePosition(context);
+                }
 
                 if (!context.Failed)
                 {
@@ -414,6 +425,60 @@ namespace CPS.ICPBL.Student
             yield return WaitForControllerIdle(context, settings.MoveTimeoutSec, label);
 
             ReleaseBaseSegment(reservationToken);
+        }
+
+        private IEnumerator MoveToBoxFinePosition(MissionContext context)
+        {
+            if (!settings.UseBoxFinePositioning)
+            {
+                yield break;
+            }
+
+            if (!TryGetBoxFineBasePosition(context.DestinationBoxType, out Vector3 finePosition))
+            {
+                yield break;
+            }
+
+            PathReservationToken reservationToken = null;
+            Vector3 from = dependencies.Controller.Position;
+            yield return ReserveBaseSegment(
+                context,
+                from,
+                finePosition,
+                "box fine position",
+                token => reservationToken = token);
+            if (context.Failed)
+            {
+                ReleaseBaseSegment(reservationToken);
+                yield break;
+            }
+
+            dependencies.SetState?.Invoke(RobotRuntimeState.MovingToBox);
+            dependencies.Controller.MoveBaseTo(finePosition);
+            yield return WaitForControllerIdle(
+                context,
+                Mathf.Max(0.1f, settings.BoxFineMoveTimeoutSec),
+                "box fine position");
+
+            ReleaseBaseSegment(reservationToken);
+        }
+
+        private bool TryGetBoxFineBasePosition(BoxType boxType, out Vector3 finePosition)
+        {
+            if (boxType == BoxType.Normal)
+            {
+                finePosition = settings.NormalBoxFineBasePosition;
+                return true;
+            }
+
+            if (boxType == BoxType.Abnormal)
+            {
+                finePosition = settings.AbnormalBoxFineBasePosition;
+                return true;
+            }
+
+            finePosition = default;
+            return false;
         }
 
         private IEnumerator ReserveBaseSegment(
@@ -890,11 +955,64 @@ namespace CPS.ICPBL.Student
             float durationSec,
             string label)
         {
+            if (!ValidateArmTarget(context, worldPos, label))
+            {
+                yield break;
+            }
+
             dependencies.Controller.MoveArmTo(
                 worldPos,
                 Quaternion.identity,
                 Mathf.Max(0.01f, durationSec));
             yield return WaitForControllerIdle(context, settings.MoveTimeoutSec, label);
+        }
+
+        private bool ValidateArmTarget(MissionContext context, Vector3 worldPos, string label)
+        {
+            if (!TryGetArmIkComponents(out UR5eDownFacingIK ik, out UR5eJointController jointController))
+            {
+                return true;
+            }
+
+            UR5eJointPose startPose = jointController.GetCurrentPose().Copy();
+            bool solved = ik.Solve(worldPos, out UR5eJointPose _);
+            float positionError = ik.LastPositionError;
+            float orientationError = ik.LastOrientationErrorDeg;
+            jointController.SetPose(startPose);
+
+            if (solved)
+            {
+                return true;
+            }
+
+            MissionFailureReason reason = label.IndexOf("place", StringComparison.OrdinalIgnoreCase) >= 0
+                ? MissionFailureReason.PlaceFailed
+                : MissionFailureReason.MoveTimeout;
+            Fail(context, reason, string.Format(
+                "IK failed for {0} target={1}; posErr={2:0.000}m, oriErr={3:0.0}deg. MoveArmTo was skipped to avoid applying the failed pose.",
+                label,
+                worldPos,
+                positionError,
+                orientationError));
+            return false;
+        }
+
+        private bool TryGetArmIkComponents(
+            out UR5eDownFacingIK ik,
+            out UR5eJointController jointController)
+        {
+            ik = null;
+            jointController = null;
+
+            MonoBehaviour controllerBehaviour = dependencies.Controller as MonoBehaviour;
+            if (controllerBehaviour == null)
+            {
+                return false;
+            }
+
+            ik = controllerBehaviour.GetComponentInChildren<UR5eDownFacingIK>(true);
+            jointController = controllerBehaviour.GetComponentInChildren<UR5eJointController>(true);
+            return ik != null && jointController != null;
         }
 
         private IEnumerator WaitForControllerIdle(

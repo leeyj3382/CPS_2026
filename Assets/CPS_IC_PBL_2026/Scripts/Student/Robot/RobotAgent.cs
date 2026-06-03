@@ -38,6 +38,12 @@ namespace CPS.ICPBL.Student
         [SerializeField, Min(0f)] private float colorRetryWaitSec = 0.1f;
         [SerializeField, Min(0)] private int colorRetryCount = 1;
 
+        [Header("Box Fine Positioning")]
+        [SerializeField] private bool useBoxFinePositioning = true;
+        [SerializeField] private Vector3 normalBoxFineBasePosition = new Vector3(0f, 0f, -7f);
+        [SerializeField] private Vector3 abnormalBoxFineBasePosition = new Vector3(9f, 0f, 2.5f);
+        [SerializeField, Min(0.1f)] private float boxFineMoveTimeoutSec = 6f;
+
         [Header("Debug")]
         [SerializeField] private bool logWithoutTelemetry = true;
 
@@ -87,6 +93,7 @@ namespace CPS.ICPBL.Student
             gripRetryCount = Mathf.Max(0, gripRetryCount);
             colorRetryWaitSec = Mathf.Max(0f, colorRetryWaitSec);
             colorRetryCount = Mathf.Max(0, colorRetryCount);
+            boxFineMoveTimeoutSec = Mathf.Max(0.1f, boxFineMoveTimeoutSec);
             debugConveyorId = Mathf.Clamp(
                 debugConveyorId,
                 StudentConstants.MinConveyorId,
@@ -338,7 +345,11 @@ namespace CPS.ICPBL.Student
                 GripRetryWaitSec = gripRetryWaitSec,
                 GripRetryCount = gripRetryCount,
                 ColorRetryWaitSec = colorRetryWaitSec,
-                ColorRetryCount = colorRetryCount
+                ColorRetryCount = colorRetryCount,
+                UseBoxFinePositioning = useBoxFinePositioning,
+                NormalBoxFineBasePosition = normalBoxFineBasePosition,
+                AbnormalBoxFineBasePosition = abnormalBoxFineBasePosition,
+                BoxFineMoveTimeoutSec = boxFineMoveTimeoutSec
             };
         }
 
