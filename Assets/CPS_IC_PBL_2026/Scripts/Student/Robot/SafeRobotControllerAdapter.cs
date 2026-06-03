@@ -25,6 +25,8 @@ namespace CPS.ICPBL.Student
             public bool AllowPositionOnlyFallback = true;
             public float PositionOnlyFallbackTolerance = 0.04f;
             public float MaxFallbackOrientationErrorDeg = 25f;
+            public int PositionOnlyFallbackMaxIterations = 80;
+            public float PositionOnlyFallbackMaxAngleStepDeg = 8f;
             public float MinArmMoveDurationSec = 0.01f;
             public ITelemetryLogger TelemetryLogger;
         }
@@ -34,6 +36,8 @@ namespace CPS.ICPBL.Student
         private Settings settings;
         private UR5eDownFacingIK downFacingIk;
         private UR5eJointController jointController;
+        private UR5eJoint[] ikJoints;
+        private Transform tcpTransform;
         private Coroutine activeArmSequence;
         private bool armBusy;
         private string lastArmMoveFailure = string.Empty;
@@ -189,37 +193,165 @@ namespace CPS.ICPBL.Student
             out string message)
         {
             startPose = jointController.GetCurrentPose().Copy();
-            bool solved = downFacingIk.Solve(worldPos, out UR5eJointPose solvedPose);
-            positionError = downFacingIk.LastPositionError;
-            orientationErrorDeg = downFacingIk.LastOrientationErrorDeg;
-            targetPose = solvedPose.Copy();
-            jointController.SetPose(startPose);
+            targetPose = startPose.Copy();
 
-            if (solved)
+            if (TryCalculateDownFacingPose(
+                worldPos,
+                startPose,
+                out UR5eJointPose downFacingPose,
+                out positionError,
+                out orientationErrorDeg))
             {
+                targetPose = downFacingPose.Copy();
                 message = string.Empty;
                 return true;
             }
 
-            if (settings.AllowPositionOnlyFallback
-                && positionError <= settings.PositionOnlyFallbackTolerance
-                && orientationErrorDeg <= settings.MaxFallbackOrientationErrorDeg)
+            float strictPositionError = positionError;
+            float strictOrientationErrorDeg = orientationErrorDeg;
+            if (settings.AllowPositionOnlyFallback)
             {
-                message = string.Format(
-                    "Down-facing IK missed strict tolerance for target={0}, but position fallback is accepted; posErr={1:0.000}m, oriErr={2:0.0}deg.",
+                if (TryCalculatePositionOnlyPose(
                     worldPos,
-                    positionError,
-                    orientationErrorDeg);
-                Log("ArmIK", message);
-                return true;
+                    startPose,
+                    out UR5eJointPose positionOnlyPose,
+                    out float fallbackPositionError,
+                    out float fallbackOrientationErrorDeg)
+                    && fallbackPositionError <= settings.PositionOnlyFallbackTolerance
+                    && fallbackOrientationErrorDeg <= settings.MaxFallbackOrientationErrorDeg)
+                {
+                    positionError = fallbackPositionError;
+                    orientationErrorDeg = fallbackOrientationErrorDeg;
+                    targetPose = positionOnlyPose.Copy();
+                    message = string.Format(
+                        "Down-facing IK failed strict tolerance for target={0}; using independent position-only fallback pose. strictPosErr={1:0.000}m, strictOriErr={2:0.0}deg, fallbackPosErr={3:0.000}m, fallbackOriErr={4:0.0}deg.",
+                        worldPos,
+                        strictPositionError,
+                        strictOrientationErrorDeg,
+                        positionError,
+                        orientationErrorDeg);
+                    Log("ArmIK", message);
+                    return true;
+                }
             }
 
             message = string.Format(
-                "IK failed for target={0}; posErr={1:0.000}m, oriErr={2:0.0}deg. Failed pose was restored and not applied.",
+                "IK failed for target={0}; strictPosErr={1:0.000}m, strictOriErr={2:0.0}deg. Failed pose was restored and not applied.",
                 worldPos,
                 positionError,
                 orientationErrorDeg);
             return false;
+        }
+
+        private bool TryCalculateDownFacingPose(
+            Vector3 worldPos,
+            UR5eJointPose startPose,
+            out UR5eJointPose targetPose,
+            out float positionError,
+            out float orientationErrorDeg)
+        {
+            bool solved = downFacingIk.Solve(worldPos, out UR5eJointPose solvedPose);
+            positionError = downFacingIk.LastPositionError;
+            orientationErrorDeg = downFacingIk.LastOrientationErrorDeg;
+            targetPose = solved ? solvedPose.Copy() : startPose.Copy();
+            jointController.SetPose(startPose);
+            return solved;
+        }
+
+        private bool TryCalculatePositionOnlyPose(
+            Vector3 worldPos,
+            UR5eJointPose startPose,
+            out UR5eJointPose targetPose,
+            out float positionError,
+            out float orientationErrorDeg)
+        {
+            targetPose = startPose.Copy();
+            positionError = float.PositiveInfinity;
+            orientationErrorDeg = float.PositiveInfinity;
+
+            if (!ResolvePositionOnlyComponents())
+            {
+                jointController.SetPose(startPose);
+                return false;
+            }
+
+            jointController.SetPose(startPose);
+            int maxIterations = Mathf.Max(1, settings.PositionOnlyFallbackMaxIterations);
+            float maxStep = Mathf.Max(0.1f, settings.PositionOnlyFallbackMaxAngleStepDeg);
+
+            for (int iteration = 0; iteration < maxIterations; iteration++)
+            {
+                positionError = GetTcpDistanceTo(worldPos);
+                if (positionError <= settings.PositionOnlyFallbackTolerance)
+                {
+                    break;
+                }
+
+                for (int jointIndex = ikJoints.Length - 1; jointIndex >= 0; jointIndex--)
+                {
+                    float delta = ComputeSignedAngleForJoint(jointIndex, worldPos);
+                    delta = Mathf.Clamp(delta, -maxStep, maxStep);
+                    UR5eJoint joint = ikJoints[jointIndex];
+                    joint.SetAngle(joint.CurrentAngle + delta);
+
+                    positionError = GetTcpDistanceTo(worldPos);
+                    if (positionError <= settings.PositionOnlyFallbackTolerance)
+                    {
+                        break;
+                    }
+                }
+            }
+
+            positionError = GetTcpDistanceTo(worldPos);
+            orientationErrorDeg = GetTcpDownOrientationErrorDeg();
+            targetPose = jointController.GetCurrentPose().Copy();
+            jointController.SetPose(startPose);
+            return positionError <= settings.PositionOnlyFallbackTolerance;
+        }
+
+        private float ComputeSignedAngleForJoint(int jointIndex, Vector3 targetWorld)
+        {
+            UR5eJoint joint = ikJoints[jointIndex];
+            if (joint == null || joint.JointTransform == null || tcpTransform == null)
+            {
+                return 0f;
+            }
+
+            Vector3 jointPosition = joint.JointTransform.position;
+            Vector3 axisWorld = GetJointAxisWorld(joint);
+            Vector3 toTcp = tcpTransform.position - jointPosition;
+            Vector3 toTarget = targetWorld - jointPosition;
+            Vector3 projectedTcp = Vector3.ProjectOnPlane(toTcp, axisWorld);
+            Vector3 projectedTarget = Vector3.ProjectOnPlane(toTarget, axisWorld);
+            if (projectedTcp.sqrMagnitude <= 1e-8f
+                || projectedTarget.sqrMagnitude <= 1e-8f)
+            {
+                return 0f;
+            }
+
+            return Vector3.SignedAngle(projectedTcp, projectedTarget, axisWorld);
+        }
+
+        private static Vector3 GetJointAxisWorld(UR5eJoint joint)
+        {
+            Vector3 localAxis = joint.LocalAxis.sqrMagnitude > Mathf.Epsilon
+                ? joint.LocalAxis.normalized
+                : Vector3.up;
+            return joint.JointTransform.TransformDirection(localAxis).normalized;
+        }
+
+        private float GetTcpDistanceTo(Vector3 worldPos)
+        {
+            return tcpTransform != null
+                ? Vector3.Distance(tcpTransform.position, worldPos)
+                : float.PositiveInfinity;
+        }
+
+        private float GetTcpDownOrientationErrorDeg()
+        {
+            return tcpTransform != null
+                ? Vector3.Angle(tcpTransform.forward, Vector3.down)
+                : float.PositiveInfinity;
         }
 
         private bool ResolveArmComponents()
@@ -240,6 +372,94 @@ namespace CPS.ICPBL.Student
             }
 
             return downFacingIk != null && jointController != null;
+        }
+
+        private bool ResolvePositionOnlyComponents()
+        {
+            if (coroutineHost == null || jointController == null)
+            {
+                return false;
+            }
+
+            if (tcpTransform == null && downFacingIk != null)
+            {
+                tcpTransform = downFacingIk.TcpTransform;
+            }
+
+            if (tcpTransform == null)
+            {
+                Transform root = coroutineHost.transform;
+                tcpTransform = FindByName(root, "AttachPoint") ?? FindByName(root, "TCP");
+            }
+
+            if (!HasAllJoints(ikJoints))
+            {
+                ikJoints = FindIkJoints();
+            }
+
+            return tcpTransform != null && HasAllJoints(ikJoints);
+        }
+
+        private UR5eJoint[] FindIkJoints()
+        {
+            var joints = new UR5eJoint[UR5eJointPose.JointCount];
+            UR5eJoint[] candidates = coroutineHost.GetComponentsInChildren<UR5eJoint>(true);
+            for (int jointIndex = 0; jointIndex < joints.Length; jointIndex++)
+            {
+                string exactName = string.Format("Joint{0}", jointIndex + 1);
+                for (int candidateIndex = 0; candidateIndex < candidates.Length; candidateIndex++)
+                {
+                    UR5eJoint candidate = candidates[candidateIndex];
+                    if (candidate != null && candidate.name.Contains(exactName))
+                    {
+                        joints[jointIndex] = candidate;
+                        break;
+                    }
+                }
+            }
+
+            return joints;
+        }
+
+        private static bool HasAllJoints(UR5eJoint[] joints)
+        {
+            if (joints == null || joints.Length != UR5eJointPose.JointCount)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < joints.Length; i++)
+            {
+                if (joints[i] == null || joints[i].JointTransform == null)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static Transform FindByName(Transform root, string name)
+        {
+            if (root == null)
+            {
+                return null;
+            }
+
+            if (root.name == name)
+            {
+                return root;
+            }
+
+            foreach (Transform child in root.GetComponentsInChildren<Transform>(true))
+            {
+                if (child.name == name)
+                {
+                    return child;
+                }
+            }
+
+            return null;
         }
 
         private void Log(string category, string message)
@@ -263,6 +483,12 @@ namespace CPS.ICPBL.Student
             normalized.MaxFallbackOrientationErrorDeg = Mathf.Max(
                 0f,
                 normalized.MaxFallbackOrientationErrorDeg);
+            normalized.PositionOnlyFallbackMaxIterations = Mathf.Max(
+                1,
+                normalized.PositionOnlyFallbackMaxIterations);
+            normalized.PositionOnlyFallbackMaxAngleStepDeg = Mathf.Max(
+                0.1f,
+                normalized.PositionOnlyFallbackMaxAngleStepDeg);
             normalized.MinArmMoveDurationSec = Mathf.Max(
                 0.001f,
                 normalized.MinArmMoveDurationSec);

@@ -20,8 +20,8 @@ namespace CPS.ICPBL.Student
 
         [Header("Base Segment Reservation")]
         [SerializeField] private bool enableSegmentReservation = true;
-        [SerializeField, Min(0.1f)] private float segmentClearanceRadius = 1.35f;
-        [SerializeField, Min(0.1f)] private float stationaryClearanceRadius = 1.15f;
+        [SerializeField, Min(0.1f)] private float segmentClearanceRadius = 1.1f;
+        [SerializeField, Min(0.1f)] private float stationaryClearanceRadius = 0.85f;
         [SerializeField, Min(0.1f)] private float reservationStaleSec = 8f;
 
         private readonly List<PathReservationToken> activeReservations =
@@ -265,6 +265,11 @@ namespace CPS.ICPBL.Student
                     continue;
                 }
 
+                if (controller.IsBusy)
+                {
+                    continue;
+                }
+
                 Vector3 otherPosition = controller.Position;
                 if (MovingAwayFromNearbyRobot(from, to, otherPosition))
                 {
@@ -290,7 +295,7 @@ namespace CPS.ICPBL.Student
                 return false;
             }
 
-            return DistanceXZ(to, otherPosition) > startDistance + 0.25f;
+            return DistanceXZ(to, otherPosition) > startDistance + 0.1f;
         }
 
         private bool SegmentsConflict(
