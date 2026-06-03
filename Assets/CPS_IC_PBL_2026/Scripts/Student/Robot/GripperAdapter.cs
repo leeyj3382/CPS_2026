@@ -116,6 +116,36 @@ namespace CPS.ICPBL.Student
             }
 
             gripper.Release();
+            LastFailureReason = gripper.IsHolding
+                ? "Release returned but IsHolding stayed true."
+                : string.Empty;
+        }
+
+        public IEnumerator WaitUntilReleased(float timeoutSec)
+        {
+            if (gripper == null)
+            {
+                LastFailureReason = "SuctionGripper reference is missing.";
+                yield break;
+            }
+
+            float deadline = Time.time + Mathf.Max(0f, timeoutSec);
+            while (Time.time <= deadline)
+            {
+                if (!gripper.IsHolding)
+                {
+                    LastFailureReason = string.Empty;
+                    yield break;
+                }
+
+                LastFailureReason = "waiting for gripper release confirmation";
+                yield return null;
+            }
+
+            if (gripper.IsHolding)
+            {
+                LastFailureReason = "release confirmation timeout";
+            }
         }
     }
 }

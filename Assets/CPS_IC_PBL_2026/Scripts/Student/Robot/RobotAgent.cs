@@ -35,6 +35,7 @@ namespace CPS.ICPBL.Student
             StudentConstants.DefaultGripReadyTimeoutSec;
         [SerializeField, Min(0f)] private float gripRetryWaitSec = 0.2f;
         [SerializeField, Min(0)] private int gripRetryCount = 1;
+        [SerializeField, Min(0f)] private float releaseConfirmTimeoutSec = 0.5f;
         [SerializeField, Min(0f)] private float colorRetryWaitSec = 0.1f;
         [SerializeField, Min(0)] private int colorRetryCount = 1;
 
@@ -43,6 +44,12 @@ namespace CPS.ICPBL.Student
         [SerializeField] private Vector3 normalBoxFineBasePosition = new Vector3(0f, 0f, -7f);
         [SerializeField] private Vector3 abnormalBoxFineBasePosition = new Vector3(9f, 0f, 2.5f);
         [SerializeField, Min(0.1f)] private float boxFineMoveTimeoutSec = 6f;
+
+        [Header("Arm IK Guard")]
+        [SerializeField] private bool useSafeArmMotion = true;
+        [SerializeField] private bool allowPositionOnlyIkFallback = true;
+        [SerializeField, Min(0.001f)] private float positionOnlyIkFallbackTolerance = 0.04f;
+        [SerializeField, Min(0f)] private float maxFallbackOrientationErrorDeg = 25f;
 
         [Header("Debug")]
         [SerializeField] private bool logWithoutTelemetry = true;
@@ -71,7 +78,12 @@ namespace CPS.ICPBL.Student
 
         public bool CanAcceptTask
         {
-            get { return activeMission == null && State == RobotRuntimeState.Idle; }
+            get
+            {
+                return activeMission == null
+                    && State == RobotRuntimeState.Idle
+                    && (suctionGripper == null || !suctionGripper.IsHolding);
+            }
         }
 
         public int CurrentStationId
@@ -91,9 +103,12 @@ namespace CPS.ICPBL.Student
             gripReadyTimeoutSec = Mathf.Max(0.1f, gripReadyTimeoutSec);
             gripRetryWaitSec = Mathf.Max(0f, gripRetryWaitSec);
             gripRetryCount = Mathf.Max(0, gripRetryCount);
+            releaseConfirmTimeoutSec = Mathf.Max(0f, releaseConfirmTimeoutSec);
             colorRetryWaitSec = Mathf.Max(0f, colorRetryWaitSec);
             colorRetryCount = Mathf.Max(0, colorRetryCount);
             boxFineMoveTimeoutSec = Mathf.Max(0.1f, boxFineMoveTimeoutSec);
+            positionOnlyIkFallbackTolerance = Mathf.Max(0.001f, positionOnlyIkFallbackTolerance);
+            maxFallbackOrientationErrorDeg = Mathf.Max(0f, maxFallbackOrientationErrorDeg);
             debugConveyorId = Mathf.Clamp(
                 debugConveyorId,
                 StudentConstants.MinConveyorId,
@@ -166,8 +181,6 @@ namespace CPS.ICPBL.Student
             ITelemetryLogger telemetryLogger = null,
             OperatingStations stationData = null)
         {
-            robotController = controller;
-            robotControllerComponent = controller as MonoBehaviour;
             suctionGripper = gripper;
             colorSensor = sensor;
             colorArea = area;
@@ -178,6 +191,7 @@ namespace CPS.ICPBL.Student
             this.pathPlanner = pathPlanner;
             this.telemetryLogger = telemetryLogger;
             operatingStations = stationData;
+            AssignRobotController(controller);
 
             poseProviderComponent = poseProvider as MonoBehaviour;
             palletizerComponent = palletizer as MonoBehaviour;
@@ -310,6 +324,14 @@ namespace CPS.ICPBL.Student
             activeMission = null;
             SetState(result.success ? RobotRuntimeState.Completed : RobotRuntimeState.Failed);
             onFinished?.Invoke(result);
+
+            if (!result.success && suctionGripper != null && suctionGripper.IsHolding)
+            {
+                LogRobotMessage(
+                    "RobotAgent failed while still holding a payload; staying Failed until manual recovery.");
+                yield break;
+            }
+
             SetState(RobotRuntimeState.Idle);
         }
 
@@ -344,6 +366,7 @@ namespace CPS.ICPBL.Student
                 GripReadyTimeoutSec = gripReadyTimeoutSec,
                 GripRetryWaitSec = gripRetryWaitSec,
                 GripRetryCount = gripRetryCount,
+                ReleaseConfirmTimeoutSec = releaseConfirmTimeoutSec,
                 ColorRetryWaitSec = colorRetryWaitSec,
                 ColorRetryCount = colorRetryCount,
                 UseBoxFinePositioning = useBoxFinePositioning,
@@ -357,8 +380,13 @@ namespace CPS.ICPBL.Student
         {
             if (robotController == null)
             {
-                robotController = ResolveInterface<IRobotController>(robotControllerComponent)
-                    ?? FindLocalInterface<IRobotController>();
+                AssignRobotController(
+                    ResolveInterface<IRobotController>(robotControllerComponent)
+                    ?? FindLocalInterface<IRobotController>());
+            }
+            else if (useSafeArmMotion && !(robotController is SafeRobotControllerAdapter))
+            {
+                AssignRobotController(robotController);
             }
 
             if (poseProvider == null)
@@ -391,10 +419,49 @@ namespace CPS.ICPBL.Student
                 telemetryLogger = ResolveInterface<ITelemetryLogger>(telemetryLoggerComponent);
             }
 
+            if (robotController is SafeRobotControllerAdapter)
+            {
+                robotController = SafeRobotControllerAdapter.Wrap(
+                    robotController,
+                    BuildArmGuardSettings());
+            }
+
             if (robotController != null)
             {
                 robotId = robotController.RobotId;
             }
+        }
+
+        private void AssignRobotController(IRobotController controller)
+        {
+            if (controller == null)
+            {
+                robotController = null;
+                return;
+            }
+
+            IRobotController unwrapped = SafeRobotControllerAdapter.Unwrap(controller);
+            if (unwrapped is MonoBehaviour controllerBehaviour)
+            {
+                robotControllerComponent = controllerBehaviour;
+            }
+
+            robotController = useSafeArmMotion
+                ? SafeRobotControllerAdapter.Wrap(unwrapped, BuildArmGuardSettings())
+                : unwrapped;
+
+            robotId = robotController.RobotId;
+        }
+
+        private SafeRobotControllerAdapter.Settings BuildArmGuardSettings()
+        {
+            return new SafeRobotControllerAdapter.Settings
+            {
+                AllowPositionOnlyFallback = allowPositionOnlyIkFallback,
+                PositionOnlyFallbackTolerance = positionOnlyIkFallbackTolerance,
+                MaxFallbackOrientationErrorDeg = maxFallbackOrientationErrorDeg,
+                TelemetryLogger = telemetryLogger
+            };
         }
 
         private void SetState(RobotRuntimeState nextState)
@@ -411,6 +478,18 @@ namespace CPS.ICPBL.Student
                 State,
                 currentStationId);
 
+            if (telemetryLogger != null)
+            {
+                telemetryLogger.LogMessage("Robot", message);
+            }
+            else if (logWithoutTelemetry)
+            {
+                Debug.Log(string.Format("[RobotAgent] {0}", message), this);
+            }
+        }
+
+        private void LogRobotMessage(string message)
+        {
             if (telemetryLogger != null)
             {
                 telemetryLogger.LogMessage("Robot", message);

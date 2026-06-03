@@ -20,8 +20,8 @@ namespace CPS.ICPBL.Student
 
         [Header("Base Segment Reservation")]
         [SerializeField] private bool enableSegmentReservation = true;
-        [SerializeField, Min(0.1f)] private float segmentClearanceRadius = 2.4f;
-        [SerializeField, Min(0.1f)] private float stationaryClearanceRadius = 2.2f;
+        [SerializeField, Min(0.1f)] private float segmentClearanceRadius = 1.35f;
+        [SerializeField, Min(0.1f)] private float stationaryClearanceRadius = 1.15f;
         [SerializeField, Min(0.1f)] private float reservationStaleSec = 8f;
 
         private readonly List<PathReservationToken> activeReservations =

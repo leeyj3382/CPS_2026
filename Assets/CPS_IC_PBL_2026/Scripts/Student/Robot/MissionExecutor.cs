@@ -37,17 +37,18 @@ namespace CPS.ICPBL.Student
             public float GripReadyTimeoutSec = StudentConstants.DefaultGripReadyTimeoutSec;
             public float GripRetryWaitSec = 0.2f;
             public int GripRetryCount = 1;
+            public float ReleaseConfirmTimeoutSec = 0.5f;
             public float ColorRetryWaitSec = 0.1f;
             public int ColorRetryCount = 1;
             public float PayloadLockWaitLogIntervalSec = 2f;
             public float PathReservationLogIntervalSec = 1f;
             public float PayloadPathPriorityBonus = 1000f;
             public float TaskAgePriorityScale = 0.01f;
-            public float PathYieldWaitSec = 2f;
-            public float PathYieldDistance = 3f;
-            public float PathYieldMoveTimeoutSec = 6f;
-            public float PathYieldCooldownSec = 1.5f;
-            public int PathYieldMaxAttempts = 3;
+            public float PathYieldWaitSec = 0.4f;
+            public float PathYieldDistance = 1.25f;
+            public float PathYieldMoveTimeoutSec = 4f;
+            public float PathYieldCooldownSec = 0.6f;
+            public int PathYieldMaxAttempts = 5;
             public bool UseBoxFinePositioning = true;
             public Vector3 NormalBoxFineBasePosition = new Vector3(0f, 0f, -7f);
             public Vector3 AbnormalBoxFineBasePosition = new Vector3(9f, 0f, 2.5f);
@@ -60,6 +61,8 @@ namespace CPS.ICPBL.Student
             public readonly MissionResult Result;
             public readonly List<ResourceLockToken> LockTokens =
                 new List<ResourceLockToken>();
+            public readonly float MissionTimeoutSec;
+            public readonly float DeadlineAt;
 
             public bool Failed;
             public bool SlotReserved;
@@ -75,6 +78,10 @@ namespace CPS.ICPBL.Student
             public MissionContext(MissionRequest request)
             {
                 Request = request;
+                MissionTimeoutSec = request != null && request.timeoutSec > 0f
+                    ? request.timeoutSec
+                    : StudentConstants.DefaultMissionTimeoutSec;
+                DeadlineAt = Time.time + MissionTimeoutSec;
                 Result = new MissionResult
                 {
                     taskId = request != null ? request.taskId : StudentConstants.NoTaskId,
@@ -306,6 +313,11 @@ namespace CPS.ICPBL.Student
             MissionFailureReason failureReason,
             string label)
         {
+            if (CheckMissionTimeout(context))
+            {
+                yield break;
+            }
+
             if (dependencies.LockManager == null)
             {
                 LogMessage("Lock", string.Format(
@@ -316,11 +328,16 @@ namespace CPS.ICPBL.Student
             }
 
             dependencies.SetState?.Invoke(RobotRuntimeState.WaitingForLock);
-            float deadline = Time.time + Mathf.Max(0f, settings.LockTimeoutSec);
+            float deadline = Time.time + ClampToMissionRemaining(context, settings.LockTimeoutSec);
             float nextPayloadWaitLogAt = Time.time
                 + Mathf.Max(0.1f, settings.PayloadLockWaitLogIntervalSec);
             while (Time.time <= deadline)
             {
+                if (CheckMissionTimeout(context))
+                {
+                    yield break;
+                }
+
                 if (dependencies.LockManager.TryAcquire(
                     key,
                     context.Request.robotId,
@@ -341,6 +358,11 @@ namespace CPS.ICPBL.Student
 
             while (context.PayloadSecured)
             {
+                if (CheckMissionTimeout(context))
+                {
+                    yield break;
+                }
+
                 if (dependencies.LockManager.TryAcquire(
                     key,
                     context.Request.robotId,
@@ -369,6 +391,11 @@ namespace CPS.ICPBL.Student
                 }
 
                 yield return null;
+            }
+
+            if (CheckMissionTimeout(context))
+            {
+                yield break;
             }
 
             dependencies.TelemetryLogger?.LogLock(
@@ -498,6 +525,11 @@ namespace CPS.ICPBL.Student
             float waitStartedAt = Time.time;
             while (true)
             {
+                if (CheckMissionTimeout(context))
+                {
+                    yield break;
+                }
+
                 currentFrom = dependencies.Controller.Position;
                 float priority = CalculatePathPriority(context);
                 if (dependencies.PathReservationManager.TryReserveBaseSegment(
@@ -586,6 +618,11 @@ namespace CPS.ICPBL.Student
 
             for (int i = 0; i < candidates.Length; i++)
             {
+                if (CheckMissionTimeout(context))
+                {
+                    yield break;
+                }
+
                 Vector3 candidate = candidates[i];
                 if (Vector3.Distance(from, candidate) <= 0.2f)
                 {
@@ -801,7 +838,18 @@ namespace CPS.ICPBL.Student
             int attempts = Mathf.Max(0, settings.GripRetryCount) + 1;
             for (int attempt = 0; attempt < attempts; attempt++)
             {
-                yield return dependencies.Gripper.WaitUntilGraspReady(settings.GripReadyTimeoutSec);
+                if (CheckMissionTimeout(context))
+                {
+                    yield break;
+                }
+
+                yield return dependencies.Gripper.WaitUntilGraspReady(
+                    ClampToMissionRemaining(context, settings.GripReadyTimeoutSec));
+                if (CheckMissionTimeout(context))
+                {
+                    yield break;
+                }
+
                 if (dependencies.Gripper.TryGrip(out string reason))
                 {
                     context.PayloadSecured = true;
@@ -836,6 +884,11 @@ namespace CPS.ICPBL.Student
             int attempts = Mathf.Max(0, settings.ColorRetryCount) + 1;
             for (int attempt = 0; attempt < attempts; attempt++)
             {
+                if (CheckMissionTimeout(context))
+                {
+                    yield break;
+                }
+
                 Color sensedColor = ReadSensedColor();
                 ColorClassificationResult classification =
                     dependencies.ColorClassifier.Classify(sensedColor);
@@ -888,6 +941,11 @@ namespace CPS.ICPBL.Student
 
         private IEnumerator RunPlaceSequence(MissionContext context)
         {
+            if (CheckMissionTimeout(context))
+            {
+                yield break;
+            }
+
             context.ReservedSlot = dependencies.Palletizer.ReserveNextSlot(
                 context.DestinationBoxType,
                 context.Request.robotId,
@@ -929,10 +987,16 @@ namespace CPS.ICPBL.Student
 
             dependencies.SetState?.Invoke(RobotRuntimeState.Releasing);
             dependencies.Gripper.Release();
-            yield return null;
+            yield return dependencies.Gripper.WaitUntilReleased(
+                ClampToMissionRemaining(context, settings.ReleaseConfirmTimeoutSec));
+            if (CheckMissionTimeout(context))
+            {
+                yield break;
+            }
+
             if (dependencies.Gripper.IsHolding)
             {
-                Fail(context, MissionFailureReason.PlaceFailed, "Release completed but gripper still holds the object.");
+                Fail(context, MissionFailureReason.PlaceFailed, dependencies.Gripper.LastFailureReason);
                 yield break;
             }
 
@@ -955,6 +1019,11 @@ namespace CPS.ICPBL.Student
             float durationSec,
             string label)
         {
+            if (CheckMissionTimeout(context))
+            {
+                yield break;
+            }
+
             if (!ValidateArmTarget(context, worldPos, label))
             {
                 yield break;
@@ -965,10 +1034,36 @@ namespace CPS.ICPBL.Student
                 Quaternion.identity,
                 Mathf.Max(0.01f, durationSec));
             yield return WaitForControllerIdle(context, settings.MoveTimeoutSec, label);
+            if (!context.Failed
+                && dependencies.Controller is IArmMotionGuard guard
+                && guard.ConsumeLastArmMoveFailure(out string failureMessage))
+            {
+                Fail(context, GetArmFailureReason(label), failureMessage);
+            }
         }
 
         private bool ValidateArmTarget(MissionContext context, Vector3 worldPos, string label)
         {
+            if (dependencies.Controller is IArmMotionGuard guard)
+            {
+                if (guard.TryValidateArmTarget(
+                    worldPos,
+                    out float guardedPositionError,
+                    out float guardedOrientationError,
+                    out string guardedMessage))
+                {
+                    return true;
+                }
+
+                Fail(context, GetArmFailureReason(label), string.Format(
+                    "{0} label={1}; posErr={2:0.000}m, oriErr={3:0.0}deg.",
+                    guardedMessage,
+                    label,
+                    guardedPositionError,
+                    guardedOrientationError));
+                return false;
+            }
+
             if (!TryGetArmIkComponents(out UR5eDownFacingIK ik, out UR5eJointController jointController))
             {
                 return true;
@@ -997,6 +1092,13 @@ namespace CPS.ICPBL.Student
             return false;
         }
 
+        private static MissionFailureReason GetArmFailureReason(string label)
+        {
+            return label.IndexOf("place", StringComparison.OrdinalIgnoreCase) >= 0
+                ? MissionFailureReason.PlaceFailed
+                : MissionFailureReason.MoveTimeout;
+        }
+
         private bool TryGetArmIkComponents(
             out UR5eDownFacingIK ik,
             out UR5eJointController jointController)
@@ -1020,9 +1122,19 @@ namespace CPS.ICPBL.Student
             float timeoutSec,
             string label)
         {
-            float deadline = Time.time + Mathf.Max(0f, timeoutSec);
+            if (CheckMissionTimeout(context))
+            {
+                yield break;
+            }
+
+            float deadline = Time.time + ClampToMissionRemaining(context, timeoutSec);
             while (dependencies.Controller.IsBusy)
             {
+                if (CheckMissionTimeout(context))
+                {
+                    yield break;
+                }
+
                 if (Time.time > deadline)
                 {
                     dependencies.SetState?.Invoke(RobotRuntimeState.Stuck);
@@ -1034,6 +1146,37 @@ namespace CPS.ICPBL.Student
 
                 yield return null;
             }
+        }
+
+        private bool CheckMissionTimeout(MissionContext context)
+        {
+            if (context == null || context.Failed)
+            {
+                return context != null && context.Failed;
+            }
+
+            if (Time.time <= context.DeadlineAt)
+            {
+                return false;
+            }
+
+            dependencies.SetState?.Invoke(RobotRuntimeState.Stuck);
+            Fail(context, MissionFailureReason.MoveTimeout, string.Format(
+                "Mission timed out after {0:0.0}s.",
+                context.MissionTimeoutSec));
+            return true;
+        }
+
+        private float ClampToMissionRemaining(MissionContext context, float timeoutSec)
+        {
+            float requestedTimeout = Mathf.Max(0f, timeoutSec);
+            if (context == null)
+            {
+                return requestedTimeout;
+            }
+
+            float remaining = Mathf.Max(0f, context.DeadlineAt - Time.time);
+            return Mathf.Min(requestedTimeout, remaining);
         }
 
         private void ReleaseKey(MissionContext context, ResourceKey key)
