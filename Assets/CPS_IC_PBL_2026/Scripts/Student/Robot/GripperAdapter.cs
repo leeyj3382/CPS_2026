@@ -121,6 +121,52 @@ namespace CPS.ICPBL.Student
                 : string.Empty;
         }
 
+        public bool TryAlignHeldObjectCenterTo(
+            Vector3 worldCenter,
+            out float alignmentError,
+            out string reason)
+        {
+            alignmentError = float.PositiveInfinity;
+            reason = string.Empty;
+
+            if (gripper == null)
+            {
+                reason = "SuctionGripper reference is missing.";
+                LastFailureReason = reason;
+                return false;
+            }
+
+            PickableObject heldObject = gripper.HeldObject;
+            if (heldObject == null)
+            {
+                reason = "No held object to align.";
+                LastFailureReason = reason;
+                return false;
+            }
+
+            Vector3 currentCenter = TryGetObjectBounds(heldObject, out Bounds bounds)
+                ? bounds.center
+                : heldObject.transform.position;
+            Vector3 delta = worldCenter - currentCenter;
+            heldObject.transform.position += delta;
+
+            Rigidbody body = heldObject.TargetRigidbody;
+            if (body != null)
+            {
+                body.position = heldObject.transform.position;
+                body.velocity = Vector3.zero;
+                body.angularVelocity = Vector3.zero;
+            }
+
+            Physics.SyncTransforms();
+            Vector3 alignedCenter = TryGetObjectBounds(heldObject, out Bounds alignedBounds)
+                ? alignedBounds.center
+                : heldObject.transform.position;
+            alignmentError = Vector3.Distance(alignedCenter, worldCenter);
+            LastFailureReason = string.Empty;
+            return true;
+        }
+
         public IEnumerator WaitUntilReleased(float timeoutSec)
         {
             if (gripper == null)
@@ -146,6 +192,34 @@ namespace CPS.ICPBL.Student
             {
                 LastFailureReason = "release confirmation timeout";
             }
+        }
+
+        private static bool TryGetObjectBounds(PickableObject pickable, out Bounds bounds)
+        {
+            Collider[] colliders = pickable.GetComponentsInChildren<Collider>();
+            bounds = default;
+            bool hasBounds = false;
+
+            for (int i = 0; i < colliders.Length; i++)
+            {
+                Collider objectCollider = colliders[i];
+                if (objectCollider == null || !objectCollider.enabled)
+                {
+                    continue;
+                }
+
+                if (!hasBounds)
+                {
+                    bounds = objectCollider.bounds;
+                    hasBounds = true;
+                }
+                else
+                {
+                    bounds.Encapsulate(objectCollider.bounds);
+                }
+            }
+
+            return hasBounds;
         }
     }
 }

@@ -60,6 +60,31 @@ namespace CPS.ICPBL.Student
             return robotId == RobotAId || robotId == RobotBId;
         }
 
+        public static bool IsRobotAOwnedConveyor(int conveyorId)
+        {
+            return conveyorId >= 1 && conveyorId <= 5;
+        }
+
+        public static bool IsRobotBOwnedConveyor(int conveyorId)
+        {
+            return conveyorId >= 6 && conveyorId <= 10;
+        }
+
+        public static int GetPreferredRobotIdForConveyor(int conveyorId)
+        {
+            if (IsRobotAOwnedConveyor(conveyorId))
+            {
+                return RobotAId;
+            }
+
+            if (IsRobotBOwnedConveyor(conveyorId))
+            {
+                return RobotBId;
+            }
+
+            return UnassignedRobotId;
+        }
+
         public static bool IsBoxStationId(int stationId)
         {
             return stationId == NormalBoxStationId || stationId == AbnormalBoxStationId;

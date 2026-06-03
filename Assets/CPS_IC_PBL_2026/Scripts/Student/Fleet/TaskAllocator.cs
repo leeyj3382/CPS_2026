@@ -45,6 +45,16 @@ namespace CPS.ICPBL.Student
             float bestDeadline = float.PositiveInfinity;
             float bestDistanceCost = float.PositiveInfinity;
             bool useOfficialNextProductionTimes = CanUseOfficialNextProductionTimes(conveyors, pendingTasks);
+            bool hasPreferredCandidate = HasPreferredCandidate(
+                conveyors,
+                robot,
+                pendingTasks,
+                false);
+            bool hasPreferredFullCandidate = HasPreferredCandidate(
+                conveyors,
+                robot,
+                pendingTasks,
+                true);
 
             for (int i = 0; i < pendingTasks.Length; i++)
             {
@@ -56,6 +66,19 @@ namespace CPS.ICPBL.Student
 
                 ConveyorSnapshot snapshot = FindSnapshot(conveyors, task.conveyorId);
                 if (!IsEligible(snapshot))
+                {
+                    continue;
+                }
+
+                bool isPreferredForRobot = IsPreferredForRobot(task.conveyorId, robot);
+                if (hasPreferredFullCandidate && !isPreferredForRobot)
+                {
+                    continue;
+                }
+
+                if (hasPreferredCandidate
+                    && !isPreferredForRobot
+                    && !IsFull(snapshot))
                 {
                     continue;
                 }
@@ -89,6 +112,47 @@ namespace CPS.ICPBL.Student
             }
 
             return bestTask;
+        }
+
+        private static bool HasPreferredCandidate(
+            ConveyorSnapshot[] conveyors,
+            StudentRobotSnapshot robot,
+            WorkTask[] pendingTasks,
+            bool requireFullQueue)
+        {
+            for (int i = 0; i < pendingTasks.Length; i++)
+            {
+                WorkTask task = pendingTasks[i];
+                if (!IsPendingAndUnassigned(task)
+                    || !IsPreferredForRobot(task.conveyorId, robot))
+                {
+                    continue;
+                }
+
+                ConveyorSnapshot snapshot = FindSnapshot(conveyors, task.conveyorId);
+                if (!IsEligible(snapshot))
+                {
+                    continue;
+                }
+
+                if (!requireFullQueue || IsFull(snapshot))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool IsPreferredForRobot(int conveyorId, StudentRobotSnapshot robot)
+        {
+            if (robot == null)
+            {
+                return false;
+            }
+
+            return StudentConstants.GetPreferredRobotIdForConveyor(conveyorId)
+                == robot.baseSnapshot.RobotId;
         }
 
         private static bool IsPendingAndUnassigned(WorkTask task)

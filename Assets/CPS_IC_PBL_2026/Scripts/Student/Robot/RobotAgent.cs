@@ -45,6 +45,9 @@ namespace CPS.ICPBL.Student
         [SerializeField] private Vector3 abnormalBoxFineBasePosition = new Vector3(9f, 0f, 2.5f);
         [SerializeField, Min(0.1f)] private float boxFineMoveTimeoutSec = 6f;
 
+        [Header("Place Alignment")]
+        [SerializeField, Min(0.001f)] private float placeAlignmentTolerance = 0.02f;
+
         [Header("Arm IK Guard")]
         [SerializeField] private bool useSafeArmMotion = true;
         [SerializeField] private bool allowPositionOnlyIkFallback = true;
@@ -107,6 +110,7 @@ namespace CPS.ICPBL.Student
             colorRetryWaitSec = Mathf.Max(0f, colorRetryWaitSec);
             colorRetryCount = Mathf.Max(0, colorRetryCount);
             boxFineMoveTimeoutSec = Mathf.Max(0.1f, boxFineMoveTimeoutSec);
+            placeAlignmentTolerance = Mathf.Max(0.001f, placeAlignmentTolerance);
             positionOnlyIkFallbackTolerance = Mathf.Max(0.001f, positionOnlyIkFallbackTolerance);
             maxFallbackOrientationErrorDeg = Mathf.Max(0f, maxFallbackOrientationErrorDeg);
             debugConveyorId = Mathf.Clamp(
@@ -372,7 +376,8 @@ namespace CPS.ICPBL.Student
                 UseBoxFinePositioning = useBoxFinePositioning,
                 NormalBoxFineBasePosition = normalBoxFineBasePosition,
                 AbnormalBoxFineBasePosition = abnormalBoxFineBasePosition,
-                BoxFineMoveTimeoutSec = boxFineMoveTimeoutSec
+                BoxFineMoveTimeoutSec = boxFineMoveTimeoutSec,
+                PlaceAlignmentTolerance = placeAlignmentTolerance
             };
         }
 

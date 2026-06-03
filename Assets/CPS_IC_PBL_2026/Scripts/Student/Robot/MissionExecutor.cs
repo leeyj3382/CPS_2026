@@ -53,6 +53,7 @@ namespace CPS.ICPBL.Student
             public Vector3 NormalBoxFineBasePosition = new Vector3(0f, 0f, -7f);
             public Vector3 AbnormalBoxFineBasePosition = new Vector3(9f, 0f, 2.5f);
             public float BoxFineMoveTimeoutSec = 6f;
+            public float PlaceAlignmentTolerance = 0.02f;
         }
 
         private sealed class MissionContext
@@ -985,6 +986,11 @@ namespace CPS.ICPBL.Student
                 yield break;
             }
 
+            if (!AlignHeldObjectToReservedSlot(context))
+            {
+                yield break;
+            }
+
             dependencies.SetState?.Invoke(RobotRuntimeState.Releasing);
             dependencies.Gripper.Release();
             yield return dependencies.Gripper.WaitUntilReleased(
@@ -1011,6 +1017,44 @@ namespace CPS.ICPBL.Student
             }
 
             ReleaseKey(context, armKey);
+        }
+
+        private bool AlignHeldObjectToReservedSlot(MissionContext context)
+        {
+            if (context.ReservedSlot == null)
+            {
+                return true;
+            }
+
+            if (!dependencies.Gripper.TryAlignHeldObjectCenterTo(
+                context.ReservedSlot.placePos,
+                out float alignmentError,
+                out string reason))
+            {
+                Fail(context, MissionFailureReason.PlaceFailed, string.Format(
+                    "Failed to align held object to pallet slot={0}: {1}",
+                    context.ReservedSlot.slotIndex,
+                    reason));
+                return false;
+            }
+
+            float tolerance = Mathf.Max(0.001f, settings.PlaceAlignmentTolerance);
+            if (alignmentError > tolerance)
+            {
+                Fail(context, MissionFailureReason.PlaceFailed, string.Format(
+                    "Held object alignment exceeded tolerance for slot={0}; error={1:0.000}m tolerance={2:0.000}m.",
+                    context.ReservedSlot.slotIndex,
+                    alignmentError,
+                    tolerance));
+                return false;
+            }
+
+            LogMessage("Place", string.Format(
+                "Aligned held object to {0} slot={1}; error={2:0.000}m.",
+                context.ReservedSlot.boxType,
+                context.ReservedSlot.slotIndex,
+                alignmentError));
+            return true;
         }
 
         private IEnumerator MoveArmTo(

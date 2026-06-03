@@ -271,6 +271,7 @@ namespace CPS.ICPBL.Student
 
         private void DispatchAvailableRobots(ConveyorSnapshot[] snapshots)
         {
+            HashSet<int> availableRobotIds = BuildAvailableRobotIdSet();
             for (int i = 0; i < robotAgents.Count; i++)
             {
                 IRobotAgent robotAgent = robotAgents[i];
@@ -279,10 +280,12 @@ namespace CPS.ICPBL.Student
                     continue;
                 }
 
-                WorkTask[] pendingTasks = BuildPendingTaskArray();
+                WorkTask[] pendingTasks = BuildPendingTaskArray(
+                    robotAgent,
+                    availableRobotIds);
                 if (pendingTasks.Length == 0)
                 {
-                    return;
+                    continue;
                 }
 
                 StudentRobotSnapshot robotSnapshot = GetRobotSnapshot(robotAgent);
@@ -297,7 +300,23 @@ namespace CPS.ICPBL.Student
                 }
 
                 DispatchTask(robotAgent, selectedTask);
+                availableRobotIds.Remove(robotAgent.RobotId);
             }
+        }
+
+        private HashSet<int> BuildAvailableRobotIdSet()
+        {
+            var availableRobotIds = new HashSet<int>();
+            for (int i = 0; i < robotAgents.Count; i++)
+            {
+                IRobotAgent robotAgent = robotAgents[i];
+                if (CanDispatch(robotAgent))
+                {
+                    availableRobotIds.Add(robotAgent.RobotId);
+                }
+            }
+
+            return availableRobotIds;
         }
 
         private bool CanDispatch(IRobotAgent robotAgent)
@@ -307,7 +326,9 @@ namespace CPS.ICPBL.Student
                 && FindInFlightTask(robotAgent.RobotId) == null;
         }
 
-        private WorkTask[] BuildPendingTaskArray()
+        private WorkTask[] BuildPendingTaskArray(
+            IRobotAgent robotAgent,
+            HashSet<int> availableRobotIds)
         {
             var pendingTasks = new List<WorkTask>();
             for (int i = 0; i < tasks.Count; i++)
@@ -316,11 +337,32 @@ namespace CPS.ICPBL.Student
                 if (task.status == TaskStatus.Pending
                     && task.assignedRobotId == StudentConstants.UnassignedRobotId)
                 {
+                    if (IsOwnedByOtherAvailableRobot(
+                        task.conveyorId,
+                        robotAgent.RobotId,
+                        availableRobotIds))
+                    {
+                        continue;
+                    }
+
                     pendingTasks.Add(task);
                 }
             }
 
             return pendingTasks.ToArray();
+        }
+
+        private static bool IsOwnedByOtherAvailableRobot(
+            int conveyorId,
+            int robotId,
+            HashSet<int> availableRobotIds)
+        {
+            int preferredRobotId =
+                StudentConstants.GetPreferredRobotIdForConveyor(conveyorId);
+            return preferredRobotId != StudentConstants.UnassignedRobotId
+                && preferredRobotId != robotId
+                && availableRobotIds != null
+                && availableRobotIds.Contains(preferredRobotId);
         }
 
         private StudentRobotSnapshot GetRobotSnapshot(IRobotAgent robotAgent)

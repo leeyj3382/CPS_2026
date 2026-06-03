@@ -70,6 +70,52 @@ namespace CPS.ICPBL.Student.Tests
         }
 
         [Test]
+        public void RunSchedulingCycle_AssignsBLineTaskToRobotBWithoutWaitingForA()
+        {
+            var robotA = new FakeRobotAgent(StudentConstants.RobotAId);
+            var robotB = new FakeRobotAgent(StudentConstants.RobotBId);
+            environment.SetQueueLength(6, 1);
+            fleetManager.ConfigureRobotAgents(robotA, robotB);
+
+            fleetManager.RunSchedulingCycle();
+
+            Assert.That(robotA.DispatchCount, Is.Zero);
+            Assert.That(robotB.DispatchCount, Is.EqualTo(1));
+            Assert.That(robotB.LastRequest.conveyorId, Is.EqualTo(6));
+        }
+
+        [Test]
+        public void RunSchedulingCycle_DispatchesBothRobotsToTheirOwnLinesInSameCycle()
+        {
+            var robotA = new FakeRobotAgent(StudentConstants.RobotAId);
+            var robotB = new FakeRobotAgent(StudentConstants.RobotBId);
+            environment.SetQueueLength(1, 1);
+            environment.SetQueueLength(6, 1);
+            fleetManager.ConfigureRobotAgents(robotA, robotB);
+
+            fleetManager.RunSchedulingCycle();
+
+            Assert.That(robotA.DispatchCount, Is.EqualTo(1));
+            Assert.That(robotB.DispatchCount, Is.EqualTo(1));
+            Assert.That(robotA.LastRequest.conveyorId, Is.EqualTo(1));
+            Assert.That(robotB.LastRequest.conveyorId, Is.EqualTo(6));
+        }
+
+        [Test]
+        public void RunSchedulingCycle_AllowsRobotAToHelpBLineFullQueueWhenBUnavailable()
+        {
+            var robotA = new FakeRobotAgent(StudentConstants.RobotAId);
+            environment.SetQueueLength(1, 1);
+            environment.SetQueueLength(6, StudentConstants.ConveyorQueueCapacity);
+            fleetManager.ConfigureRobotAgents(robotA, null);
+
+            fleetManager.RunSchedulingCycle();
+
+            Assert.That(robotA.DispatchCount, Is.EqualTo(1));
+            Assert.That(robotA.LastRequest.conveyorId, Is.EqualTo(6));
+        }
+
+        [Test]
         public void MissionCompletion_ReleasesReservationAndCompletesTask()
         {
             var robot = new FakeRobotAgent(StudentConstants.RobotAId);
