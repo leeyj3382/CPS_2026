@@ -55,6 +55,49 @@ namespace CPS.ICPBL.Student.Tests
         }
 
         [Test]
+        public void RunSchedulingCycle_DispatchesPriorityQueueBeforeRobotRange()
+        {
+            var robot = new FakeRobotAgent(StudentConstants.RobotAId);
+            environment.SetQueueLength(4, 1);
+            environment.SetQueueLength(8, 2);
+            fleetManager.ConfigureRobotAgents(robot, null);
+
+            fleetManager.RunSchedulingCycle();
+
+            Assert.That(robot.DispatchCount, Is.EqualTo(1));
+            Assert.That(robot.LastRequest.conveyorId, Is.EqualTo(8));
+        }
+
+        [Test]
+        public void RunSchedulingCycle_RobotAPrefersConveyorsOneToFiveAfterPriorityQueues()
+        {
+            var robot = new FakeRobotAgent(StudentConstants.RobotAId);
+            environment.SetQueueLength(4, 1);
+            environment.SetQueueLength(8, 1);
+            fleetManager.ConfigureRobotAgents(robot, null);
+
+            fleetManager.RunSchedulingCycle();
+
+            Assert.That(robot.DispatchCount, Is.EqualTo(1));
+            Assert.That(robot.LastRequest.conveyorId, Is.EqualTo(4));
+        }
+
+        [Test]
+        public void RunSchedulingCycle_RobotBPrefersConveyorsSixToTenThenLargestQueue()
+        {
+            var robot = new FakeRobotAgent(StudentConstants.RobotBId);
+            environment.SetQueueLength(2, StudentConstants.ConveyorQueueCapacity);
+            environment.SetQueueLength(6, 1);
+            environment.SetQueueLength(9, 2);
+            fleetManager.ConfigureRobotAgents(null, robot);
+
+            fleetManager.RunSchedulingCycle();
+
+            Assert.That(robot.DispatchCount, Is.EqualTo(1));
+            Assert.That(robot.LastRequest.conveyorId, Is.EqualTo(9));
+        }
+
+        [Test]
         public void RunSchedulingCycle_DoesNotAssignOneConveyorToBothRobots()
         {
             var robotA = new FakeRobotAgent(StudentConstants.RobotAId);

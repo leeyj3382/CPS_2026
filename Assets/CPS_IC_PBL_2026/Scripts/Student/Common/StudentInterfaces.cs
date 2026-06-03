@@ -61,6 +61,21 @@ namespace CPS.ICPBL.Student
             int robotId,
             Vector3 from,
             Vector3 originalTarget);
+
+        bool IsBasePathBlocked(
+            int robotId,
+            Vector3 from,
+            Vector3 to,
+            out int blockingRobotId);
+
+        bool IsBasePathBlocked(
+            int robotId,
+            int targetStationId,
+            Vector3 from,
+            Vector3 to,
+            out int blockingRobotId,
+            out bool waitForSameBox,
+            out bool preferDetour);
     }
 
     public interface IPathReservationManager
@@ -76,6 +91,18 @@ namespace CPS.ICPBL.Student
             out int blockingTaskId);
 
         void ReleaseBaseSegment(PathReservationToken token);
+    }
+
+    public interface IPathTrafficManager
+    {
+        void RegisterActiveBasePath(
+            int robotId,
+            int taskId,
+            Vector3 from,
+            Vector3 to,
+            bool hasPayload);
+
+        void ClearActiveBasePath(int robotId, int taskId);
     }
 
     public interface ITelemetryLogger

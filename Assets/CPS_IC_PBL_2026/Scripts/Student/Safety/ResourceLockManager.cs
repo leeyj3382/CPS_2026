@@ -15,6 +15,7 @@ namespace CPS.ICPBL.Student
 
         [Header("Diagnostics")]
         [SerializeField] private bool logWarnings = true;
+        [SerializeField] private bool warnAcquireFailures = false;
         [SerializeField] private bool warnLongHeldLocks = true;
         [SerializeField, Min(0.1f)] private float longHoldWarningSec = 10f;
         [SerializeField, Min(0.1f)] private float warningIntervalSec = 5f;
@@ -171,13 +172,22 @@ namespace CPS.ICPBL.Student
             }
 
             existing.LastAcquireFailureWarningAt = Time.time;
-            Warn(string.Format(
+            string message = string.Format(
                 "Acquire failed key={0} requestedBy robot={1} task={2}; heldBy robot={3} task={4}.",
                 key,
                 robotId,
                 taskId,
                 existing.Token.robotId,
-                existing.Token.taskId));
+                existing.Token.taskId);
+
+            if (warnAcquireFailures)
+            {
+                Warn(message);
+            }
+            else
+            {
+                Debug.Log(string.Format("[ResourceLockManager] {0}", message), this);
+            }
         }
 
         private void Warn(string message)

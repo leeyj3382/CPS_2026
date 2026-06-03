@@ -59,7 +59,10 @@ namespace CPS.ICPBL.Student
                 planner.ConfigureRobots(
                     sceneReferences.RobotAController,
                     sceneReferences.RobotBController,
-                    sceneReferences.TelemetryLogger);
+                    sceneReferences.TelemetryLogger,
+                    sceneReferences.RobotAAgent,
+                    sceneReferences.RobotBAgent,
+                    sceneReferences.OperatingStations);
             }
         }
 

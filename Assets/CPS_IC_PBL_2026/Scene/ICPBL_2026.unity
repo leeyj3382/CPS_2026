@@ -8381,20 +8381,39 @@ MonoBehaviour:
   requireCentralZoneForCrossSideMove: 1
   requireCentralZoneForBoxAccess: 1
   enableSegmentReservation: 1
-  segmentClearanceRadius: 1.8
-  stationaryClearanceRadius: 1.6
+  segmentClearanceRadius: 2.6
+  stationaryClearanceRadius: 2.5
+  hardSegmentClearanceRadius: 1.8
+  hardStationaryClearanceRadius: 1.8
   reservationStaleSec: 8
-  enableLaneRouting: 1
+  enableTemporalConflictCheck: 1
+  estimatedBaseSpeed: 7.5
+  conflictTimeWindowSec: 0.9
+  movingBlockDistance: 2.35
+  movingResumeDistance: 2.8
+  stationaryWorkClearanceRadius: 3.2
+  ignoreBehindDistance: 0.35
+  stopImmediatelyForLowerPriorityCrossing: 1
+  crossingHoldDistance: 3
+  crossingPriorityMargin: 0.8
+  pathStartPriorityMarginSec: 0.15
+  activePathStaleSec: 45
+  enableLaneRouting: 0
   robotALaneX: -7.2
   robotBLaneX: 7.2
   lowerLaneZ: -7.4
   upperLaneZ: 9.3
   waypointMergeDistance: 0.6
-  detourDistance: 3
+  detourDistance: 4.5
   worldMinX: -9.5
   worldMaxX: 10.5
   worldMinZ: -8
   worldMaxZ: 11.5
+  avoidBoxKeepOutZones: 1
+  normalBoxCenter: {x: 0, y: 0, z: -8}
+  abnormalBoxCenter: {x: 10.5, y: 0, z: 2.5}
+  boxKeepOutRadius: 2.25
+  boxBypassPadding: 1.6
 --- !u!114 &2140976388
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -8408,6 +8427,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   logWarnings: 1
+  warnAcquireFailures: 0
   warnLongHeldLocks: 1
   longHoldWarningSec: 10
   warningIntervalSec: 5
