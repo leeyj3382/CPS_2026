@@ -55,7 +55,7 @@ namespace CPS.ICPBL.Student.Tests
         }
 
         [Test]
-        public void RunSchedulingCycle_DispatchesPriorityQueueBeforeRobotRange()
+        public void RunSchedulingCycle_DispatchesEarlierSaturationBeforePriorityQueue()
         {
             var robot = new FakeRobotAgent(StudentConstants.RobotAId);
             environment.SetQueueLength(4, 1);
@@ -65,7 +65,7 @@ namespace CPS.ICPBL.Student.Tests
             fleetManager.RunSchedulingCycle();
 
             Assert.That(robot.DispatchCount, Is.EqualTo(1));
-            Assert.That(robot.LastRequest.conveyorId, Is.EqualTo(8));
+            Assert.That(robot.LastRequest.conveyorId, Is.EqualTo(4));
         }
 
         [Test]
@@ -83,7 +83,7 @@ namespace CPS.ICPBL.Student.Tests
         }
 
         [Test]
-        public void RunSchedulingCycle_RobotBPrefersConveyorsSixToTenThenLargestQueue()
+        public void RunSchedulingCycle_RobotBDispatchesFullQueueBeforeRobotRange()
         {
             var robot = new FakeRobotAgent(StudentConstants.RobotBId);
             environment.SetQueueLength(2, StudentConstants.ConveyorQueueCapacity);
@@ -94,7 +94,7 @@ namespace CPS.ICPBL.Student.Tests
             fleetManager.RunSchedulingCycle();
 
             Assert.That(robot.DispatchCount, Is.EqualTo(1));
-            Assert.That(robot.LastRequest.conveyorId, Is.EqualTo(9));
+            Assert.That(robot.LastRequest.conveyorId, Is.EqualTo(2));
         }
 
         [Test]
@@ -139,10 +139,6 @@ namespace CPS.ICPBL.Student.Tests
             Assert.That(fleetManager.Tasks[0].conveyorPicked, Is.True);
             Assert.That(fleetManager.ReservedConveyorIds, Is.Empty);
 
-            fleetManager.RunSchedulingCycle();
-            Assert.That(fleetManager.Tasks, Has.Count.EqualTo(1));
-
-            environment.CurrentTime = 2f;
             fleetManager.RunSchedulingCycle();
             Assert.That(fleetManager.Tasks, Has.Count.EqualTo(2));
             Assert.That(fleetManager.Tasks[1].status, Is.EqualTo(TaskStatus.Pending));

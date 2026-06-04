@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using CPS.ICPBL.Common;
+using UnityEngine;
 
 namespace CPS.ICPBL.Student
 {
@@ -27,6 +28,8 @@ namespace CPS.ICPBL.Student
         {
             int snapshotCount = StudentConstants.MaxConveyorId - StudentConstants.MinConveyorId + 1;
             var snapshots = new ConveyorSnapshot[snapshotCount];
+            float currentTime = environmentInfo.CurrentTime;
+            float productionEndTime = environmentInfo.ProductionEndTime;
 
             for (int conveyorId = StudentConstants.MinConveyorId;
                 conveyorId <= StudentConstants.MaxConveyorId;
@@ -38,18 +41,46 @@ namespace CPS.ICPBL.Student
                     lastAssignedAtByConveyor.TryGetValue(conveyorId, out lastAssignedAt);
                 }
 
+                float productionPeriod = StudentConstants.GetConveyorProductionPeriod(conveyorId);
+                float nextProductionAt = environmentInfo.NextProductionAt(conveyorId);
+                if (nextProductionAt < 0f)
+                {
+                    nextProductionAt = EstimateNextProductionAt(
+                        currentTime,
+                        productionPeriod,
+                        productionEndTime);
+                }
+
                 snapshots[conveyorId - StudentConstants.MinConveyorId] = new ConveyorSnapshot
                 {
                     conveyorId = conveyorId,
                     queueLength = environmentInfo.GetQueueLength(conveyorId),
-                    productionPeriod = StudentConstants.GetConveyorProductionPeriod(conveyorId),
-                    nextProductionAt = environmentInfo.NextProductionAt(conveyorId),
+                    productionPeriod = productionPeriod,
+                    nextProductionAt = nextProductionAt,
                     lastAssignedAt = lastAssignedAt,
                     isReserved = reservedConveyorIds != null && reservedConveyorIds.Contains(conveyorId)
                 };
             }
 
             return snapshots;
+        }
+
+        private static float EstimateNextProductionAt(
+            float currentTime,
+            float productionPeriod,
+            float productionEndTime)
+        {
+            if (productionPeriod <= 0f)
+            {
+                return float.PositiveInfinity;
+            }
+
+            float safeCurrentTime = System.Math.Max(0f, currentTime);
+            float nextCycle = Mathf.Floor(safeCurrentTime / productionPeriod) + 1f;
+            float nextProductionAt = nextCycle * productionPeriod;
+            return nextProductionAt <= productionEndTime
+                ? nextProductionAt
+                : float.PositiveInfinity;
         }
     }
 }

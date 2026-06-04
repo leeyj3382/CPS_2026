@@ -50,6 +50,7 @@ namespace CPS.ICPBL.Student
             public float BasePathCheckIntervalSec = 0.05f;
             public float BasePathResumeCheckIntervalSec = 0.1f;
             public float BaseStopSettleSec = 0.05f;
+            public float BaseBlockedEscapeSec = 2f;
         }
 
         private sealed class MissionContext
@@ -466,6 +467,7 @@ namespace CPS.ICPBL.Student
                         yield break;
                     }
 
+                    ClearActiveBasePath(context);
                     yield return new WaitForSeconds(Mathf.Max(0f, settings.BaseStopSettleSec));
                     bool detoured = false;
                     if (CanAttemptDynamicDetour(
@@ -496,7 +498,7 @@ namespace CPS.ICPBL.Student
                         }
                     }
 
-                    RegisterActiveBasePath(context, targetPosition);
+                    float blockedWaitStartedAt = Time.time;
                     while (IsPathBlockedByRobot(
                         context,
                         stationId,
@@ -519,10 +521,15 @@ namespace CPS.ICPBL.Student
                         }
 
                         if (CanAttemptDynamicDetour(
-                            context,
-                            blockingRobotId,
-                            waitForSameBox,
-                            preferDetour))
+                                context,
+                                blockingRobotId,
+                                waitForSameBox,
+                                preferDetour)
+                            || CanAttemptBlockedEscape(
+                                context,
+                                blockingRobotId,
+                                waitForSameBox,
+                                blockedWaitStartedAt))
                         {
                             bool retriedDetour = false;
                             yield return TryYieldFromBlockedPath(
@@ -539,6 +546,7 @@ namespace CPS.ICPBL.Student
 
                             if (retriedDetour)
                             {
+                                blockedWaitStartedAt = Time.time;
                                 break;
                             }
                         }
@@ -600,6 +608,30 @@ namespace CPS.ICPBL.Student
             bool preferDetour)
         {
             if (!preferDetour || waitForSameBox)
+            {
+                return false;
+            }
+
+            if (Time.time < context.NextPathYieldAt)
+            {
+                return false;
+            }
+
+            return context.PathYieldAttempts < Mathf.Max(0, settings.PathYieldMaxAttempts);
+        }
+
+        private bool CanAttemptBlockedEscape(
+            MissionContext context,
+            int blockingRobotId,
+            bool waitForSameBox,
+            float blockedWaitStartedAt)
+        {
+            if (blockingRobotId == StudentConstants.UnassignedRobotId || waitForSameBox)
+            {
+                return false;
+            }
+
+            if (Time.time - blockedWaitStartedAt < Mathf.Max(0.1f, settings.BaseBlockedEscapeSec))
             {
                 return false;
             }
@@ -813,10 +845,12 @@ namespace CPS.ICPBL.Student
                     yield break;
                 }
 
+                ClearActiveBasePath(context);
                 from = dependencies.Controller.Position;
                 continue;
             }
 
+            ClearActiveBasePath(context);
             LogMessage("Path", string.Format(
                 "No safe yield candidate robot={0} task={1} label={2}.",
                 context.Request.robotId,
