@@ -424,6 +424,30 @@ namespace CPS.ICPBL.Student
 
         private void OnMissionFinished(int expectedTaskId, MissionResult result)
         {
+            try
+            {
+                HandleMissionFinished(expectedTaskId, result);
+            }
+            catch (Exception exception)
+            {
+                WorkTask task = FindTaskById(expectedTaskId);
+                if (task != null)
+                {
+                    ReleaseReservation(task.conveyorId);
+                    task.status = TaskStatus.Failed;
+                    task.assignedRobotId = StudentConstants.UnassignedRobotId;
+                    RemoveActiveTaskIfMatches(task.conveyorId, task);
+                }
+
+                LogMessage("Scheduling", string.Format(
+                    "Mission finish handling failed task={0}: {1}",
+                    expectedTaskId,
+                    exception.Message));
+            }
+        }
+
+        private void HandleMissionFinished(int expectedTaskId, MissionResult result)
+        {
             WorkTask task = FindTaskById(expectedTaskId);
             if (task == null
                 || (task.status != TaskStatus.Reserved && task.status != TaskStatus.Running))

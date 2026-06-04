@@ -218,7 +218,7 @@ namespace CPS.ICPBL.Student
                     request,
                     MissionFailureReason.Unknown,
                     "RobotAgent is already running a mission.");
-                onFinished?.Invoke(busyResult);
+                InvokeFinishedSafely(onFinished, busyResult);
                 return;
             }
 
@@ -302,8 +302,39 @@ namespace CPS.ICPBL.Student
 
             activeMission = null;
             SetState(result.success ? RobotRuntimeState.Completed : RobotRuntimeState.Failed);
-            onFinished?.Invoke(result);
             SetState(RobotRuntimeState.Idle);
+            InvokeFinishedSafely(onFinished, result);
+        }
+
+        private void InvokeFinishedSafely(
+            Action<MissionResult> onFinished,
+            MissionResult result)
+        {
+            if (onFinished == null)
+            {
+                return;
+            }
+
+            try
+            {
+                onFinished(result);
+            }
+            catch (Exception exception)
+            {
+                string message = string.Format(
+                    "Mission finished callback failed robot={0} task={1}: {2}",
+                    robotId,
+                    result != null ? result.taskId : StudentConstants.NoTaskId,
+                    exception.Message);
+                if (telemetryLogger != null)
+                {
+                    telemetryLogger.LogMessage("Robot", message);
+                }
+                else if (logWithoutTelemetry)
+                {
+                    Debug.LogWarning(string.Format("[RobotAgent] {0}", message), this);
+                }
+            }
         }
 
         private MissionExecutor.Dependencies BuildDependencies()
@@ -320,6 +351,7 @@ namespace CPS.ICPBL.Student
                 LockManager = lockManager,
                 PathPlanner = pathPlanner,
                 PathReservationManager = pathPlanner as IPathReservationManager,
+                PathTrafficManager = pathPlanner as IPathTrafficManager,
                 OperatingStations = operatingStations,
                 TelemetryLogger = telemetryLogger,
                 GetCurrentStationId = () => currentStationId,

@@ -21,6 +21,7 @@ namespace CPS.ICPBL.Student
             public IResourceLockManager LockManager;
             public IPathPlanner PathPlanner;
             public IPathReservationManager PathReservationManager;
+            public IPathTrafficManager PathTrafficManager;
             public OperatingStations OperatingStations;
             public ITelemetryLogger TelemetryLogger;
             public Func<int> GetCurrentStationId;
@@ -42,10 +43,13 @@ namespace CPS.ICPBL.Student
             public float PayloadPathPriorityBonus = 1000f;
             public float TaskAgePriorityScale = 0.01f;
             public float PathYieldWaitSec = 2f;
-            public float PathYieldDistance = 3f;
+            public float PathYieldDistance = 4.5f;
             public float PathYieldMoveTimeoutSec = 6f;
-            public float PathYieldCooldownSec = 1.5f;
-            public int PathYieldMaxAttempts = 3;
+            public float PathYieldCooldownSec = 0.8f;
+            public int PathYieldMaxAttempts = 5;
+            public float BasePathCheckIntervalSec = 0.05f;
+            public float BasePathResumeCheckIntervalSec = 0.1f;
+            public float BaseStopSettleSec = 0.05f;
         }
 
         private sealed class MissionContext
@@ -108,14 +112,6 @@ namespace CPS.ICPBL.Student
                 request.conveyorId);
 
             yield return AcquireCentralZoneIfNeeded(context, request.conveyorId);
-            if (!context.Failed)
-            {
-                yield return AcquireLock(
-                    context,
-                    conveyorKey,
-                    MissionFailureReason.CollisionRisk,
-                    "conveyor lock");
-            }
 
             if (!context.Failed)
             {
@@ -129,6 +125,15 @@ namespace CPS.ICPBL.Student
             ReleaseKey(context, new ResourceKey(
                 LockResourceType.CentralZone,
                 StudentConstants.CentralZoneResourceId));
+
+            if (!context.Failed)
+            {
+                yield return AcquireLock(
+                    context,
+                    conveyorKey,
+                    MissionFailureReason.CollisionRisk,
+                    "conveyor lock");
+            }
 
             if (!context.Failed)
             {
@@ -154,15 +159,6 @@ namespace CPS.ICPBL.Student
 
                 if (!context.Failed)
                 {
-                    yield return AcquireLock(
-                        context,
-                        boxKey,
-                        MissionFailureReason.BoxLockFailed,
-                        "box lock");
-                }
-
-                if (!context.Failed)
-                {
                     yield return AcquireCentralZoneIfNeeded(context, context.Result.destinationStationId);
                 }
 
@@ -178,6 +174,15 @@ namespace CPS.ICPBL.Student
                 ReleaseKey(context, new ResourceKey(
                     LockResourceType.CentralZone,
                     StudentConstants.CentralZoneResourceId));
+
+                if (!context.Failed)
+                {
+                    yield return AcquireLock(
+                        context,
+                        boxKey,
+                        MissionFailureReason.BoxLockFailed,
+                        "box lock");
+                }
 
                 if (!context.Failed)
                 {
@@ -388,7 +393,6 @@ namespace CPS.ICPBL.Student
             int stationId,
             string label)
         {
-            PathReservationToken reservationToken = null;
             OperatingStations.Station targetStation = default;
             bool hasStationPosition = false;
             if (dependencies.OperatingStations != null)
@@ -400,20 +404,229 @@ namespace CPS.ICPBL.Student
 
             if (hasStationPosition)
             {
-                Vector3 from = dependencies.Controller.Position;
-                Vector3 to = targetStation.BasePosition;
-                yield return ReserveBaseSegment(context, from, to, label, token => reservationToken = token);
-                if (context.Failed)
+                RegisterActiveBasePath(context, targetStation.BasePosition);
+                dependencies.Controller.GoToOperatingStation(stationId);
+                yield return WaitForBaseMoveWithDynamicStop(
+                    context,
+                    stationId,
+                    targetStation.BasePosition,
+                    label);
+                ClearActiveBasePath(context);
+            }
+            else
+            {
+                dependencies.Controller.GoToOperatingStation(stationId);
+                yield return WaitForControllerIdle(context, settings.MoveTimeoutSec, label);
+            }
+        }
+
+        private IEnumerator WaitForBaseMoveWithDynamicStop(
+            MissionContext context,
+            int stationId,
+            Vector3 targetPosition,
+            string label)
+        {
+            float movingDeadline = Time.time + Mathf.Max(0f, settings.MoveTimeoutSec);
+            float nextCheckAt = Time.time;
+
+            while (dependencies.Controller.IsBusy)
+            {
+                if (Time.time > movingDeadline)
                 {
-                    ReleaseBaseSegment(reservationToken);
+                    dependencies.SetState?.Invoke(RobotRuntimeState.Stuck);
+                    Fail(context, MissionFailureReason.MoveTimeout, string.Format(
+                        "Timed out while waiting for {0}.",
+                        label));
                     yield break;
                 }
+
+                if (Time.time >= nextCheckAt
+                    && IsPathBlockedByRobot(
+                        context,
+                        stationId,
+                        targetPosition,
+                        out int blockingRobotId,
+                        out bool waitForSameBox,
+                        out bool preferDetour))
+                {
+                    LogMessage("Path", string.Format(
+                        "Robot={0} task={1} stopping before {2}; blockedBy robot={3}.",
+                        context.Request.robotId,
+                        context.Request.taskId,
+                        label,
+                        blockingRobotId));
+
+                    dependencies.Controller.MoveBaseTo(dependencies.Controller.Position);
+                    yield return WaitForControllerIdle(
+                        context,
+                        Mathf.Max(0.1f, settings.PathYieldMoveTimeoutSec),
+                        string.Format("base stop before {0}", label));
+                    if (context.Failed)
+                    {
+                        yield break;
+                    }
+
+                    yield return new WaitForSeconds(Mathf.Max(0f, settings.BaseStopSettleSec));
+                    bool detoured = false;
+                    if (CanAttemptDynamicDetour(
+                        context,
+                        blockingRobotId,
+                        waitForSameBox,
+                        preferDetour))
+                    {
+                        yield return TryYieldFromBlockedPath(
+                            context,
+                            stationId,
+                            dependencies.Controller.Position,
+                            targetPosition,
+                            label,
+                            value => detoured = value);
+                        if (context.Failed)
+                        {
+                            yield break;
+                        }
+
+                        if (detoured)
+                        {
+                            movingDeadline = Time.time + Mathf.Max(0f, settings.MoveTimeoutSec);
+                            RegisterActiveBasePath(context, targetPosition);
+                            dependencies.Controller.GoToOperatingStation(stationId);
+                            nextCheckAt = Time.time + Mathf.Max(0.01f, settings.BasePathCheckIntervalSec);
+                            continue;
+                        }
+                    }
+
+                    RegisterActiveBasePath(context, targetPosition);
+                    while (IsPathBlockedByRobot(
+                        context,
+                        stationId,
+                        targetPosition,
+                        out blockingRobotId,
+                        out waitForSameBox,
+                        out preferDetour))
+                    {
+                        if (blockingRobotId == StudentConstants.UnassignedRobotId)
+                        {
+                            LogMessage("Path", string.Format(
+                                "Robot={0} task={1} blocked by static keep-out before {2}; waiting.",
+                                context.Request.robotId,
+                                context.Request.taskId,
+                                label));
+                            yield return new WaitForSeconds(Mathf.Max(
+                                0.01f,
+                                settings.PathYieldCooldownSec));
+                            continue;
+                        }
+
+                        if (CanAttemptDynamicDetour(
+                            context,
+                            blockingRobotId,
+                            waitForSameBox,
+                            preferDetour))
+                        {
+                            bool retriedDetour = false;
+                            yield return TryYieldFromBlockedPath(
+                                context,
+                                stationId,
+                                dependencies.Controller.Position,
+                                targetPosition,
+                                label,
+                                value => retriedDetour = value);
+                            if (context.Failed)
+                            {
+                                yield break;
+                            }
+
+                            if (retriedDetour)
+                            {
+                                break;
+                            }
+                        }
+
+                        LogMessage("Path", string.Format(
+                            "Robot={0} task={1} waiting to resume {2}; blockedBy robot={3}{4}.",
+                            context.Request.robotId,
+                            context.Request.taskId,
+                            label,
+                            blockingRobotId,
+                            waitForSameBox ? " sameBox=true" : string.Empty));
+                        yield return new WaitForSeconds(Mathf.Max(
+                            0.01f,
+                            settings.BasePathResumeCheckIntervalSec));
+                    }
+
+                    movingDeadline = Time.time + Mathf.Max(0f, settings.MoveTimeoutSec);
+                    RegisterActiveBasePath(context, targetPosition);
+                    dependencies.Controller.GoToOperatingStation(stationId);
+                    nextCheckAt = Time.time + Mathf.Max(0.01f, settings.BasePathCheckIntervalSec);
+                    continue;
+                }
+
+                nextCheckAt = Time.time + Mathf.Max(0.01f, settings.BasePathCheckIntervalSec);
+                yield return null;
+            }
+        }
+
+        private bool IsPathBlockedByRobot(
+            MissionContext context,
+            int targetStationId,
+            Vector3 targetPosition,
+            out int blockingRobotId,
+            out bool waitForSameBox,
+            out bool preferDetour)
+        {
+            blockingRobotId = StudentConstants.UnassignedRobotId;
+            waitForSameBox = false;
+            preferDetour = false;
+            if (dependencies.PathPlanner == null)
+            {
+                return false;
             }
 
-            dependencies.Controller.GoToOperatingStation(stationId);
-            yield return WaitForControllerIdle(context, settings.MoveTimeoutSec, label);
+            return dependencies.PathPlanner.IsBasePathBlocked(
+                context.Request.robotId,
+                targetStationId,
+                dependencies.Controller.Position,
+                targetPosition,
+                out blockingRobotId,
+                out waitForSameBox,
+                out preferDetour);
+        }
 
-            ReleaseBaseSegment(reservationToken);
+        private bool CanAttemptDynamicDetour(
+            MissionContext context,
+            int blockingRobotId,
+            bool waitForSameBox,
+            bool preferDetour)
+        {
+            if (!preferDetour || waitForSameBox)
+            {
+                return false;
+            }
+
+            if (Time.time < context.NextPathYieldAt)
+            {
+                return false;
+            }
+
+            return context.PathYieldAttempts < Mathf.Max(0, settings.PathYieldMaxAttempts);
+        }
+
+        private void RegisterActiveBasePath(MissionContext context, Vector3 targetPosition)
+        {
+            dependencies.PathTrafficManager?.RegisterActiveBasePath(
+                context.Request.robotId,
+                context.Request.taskId,
+                dependencies.Controller.Position,
+                targetPosition,
+                context.PayloadSecured);
+        }
+
+        private void ClearActiveBasePath(MissionContext context)
+        {
+            dependencies.PathTrafficManager?.ClearActiveBasePath(
+                context.Request.robotId,
+                context.Request.taskId);
         }
 
         private IEnumerator ReserveBaseSegment(
@@ -454,6 +667,7 @@ namespace CPS.ICPBL.Student
                     bool yielded = false;
                     yield return TryYieldFromBlockedPath(
                         context,
+                        StudentConstants.NoStationId,
                         currentFrom,
                         to,
                         label,
@@ -511,19 +725,43 @@ namespace CPS.ICPBL.Student
 
         private IEnumerator TryYieldFromBlockedPath(
             MissionContext context,
+            int targetStationId,
             Vector3 from,
             Vector3 originalTarget,
             string label,
             Action<bool> onYielded)
         {
             context.NextPathYieldAt = Time.time + Mathf.Max(0.1f, settings.PathYieldCooldownSec);
-            Vector3[] candidates = BuildYieldCandidates(context, from, originalTarget);
+            IReadOnlyList<Vector3> candidates = dependencies.PathPlanner != null
+                ? dependencies.PathPlanner.BuildYieldCandidates(
+                    context.Request.robotId,
+                    from,
+                    originalTarget)
+                : BuildYieldCandidates(context, from, originalTarget);
 
-            for (int i = 0; i < candidates.Length; i++)
+            for (int i = 0; i < candidates.Count; i++)
             {
+                from = dependencies.Controller.Position;
                 Vector3 candidate = candidates[i];
                 if (Vector3.Distance(from, candidate) <= 0.2f)
                 {
+                    continue;
+                }
+
+                if (IsPathBlockedByRobot(
+                    context,
+                    targetStationId,
+                    candidate,
+                    out int candidateBlockingRobotId,
+                    out _,
+                    out _))
+                {
+                    LogMessage("Path", string.Format(
+                        "Yield candidate unsafe robot={0} task={1} label={2}; blockedBy robot={3}.",
+                        context.Request.robotId,
+                        context.Request.taskId,
+                        label,
+                        candidateBlockingRobotId));
                     continue;
                 }
 
@@ -556,21 +794,27 @@ namespace CPS.ICPBL.Student
                     label,
                     candidate.x,
                     candidate.z,
-                    context.PathYieldAttempts));
+                        context.PathYieldAttempts));
 
+                RegisterActiveBasePath(context, candidate);
                 dependencies.Controller.MoveBaseTo(candidate);
-                yield return WaitForControllerIdle(
+                bool arrived = false;
+                yield return WaitForDetourMove(
                     context,
+                    candidate,
                     Mathf.Max(0.1f, settings.PathYieldMoveTimeoutSec),
-                    string.Format("path yield before {0}", label));
+                    string.Format("path yield before {0}", label),
+                    value => arrived = value);
                 ReleaseBaseSegment(yieldToken);
 
-                if (!context.Failed)
+                if (!context.Failed && arrived)
                 {
                     onYielded?.Invoke(true);
+                    yield break;
                 }
 
-                yield break;
+                from = dependencies.Controller.Position;
+                continue;
             }
 
             LogMessage("Path", string.Format(
@@ -579,6 +823,58 @@ namespace CPS.ICPBL.Student
                 context.Request.taskId,
                 label));
             onYielded?.Invoke(false);
+        }
+
+        private IEnumerator WaitForDetourMove(
+            MissionContext context,
+            Vector3 targetPosition,
+            float timeoutSec,
+            string label,
+            Action<bool> onArrived)
+        {
+            float deadline = Time.time + Mathf.Max(0f, timeoutSec);
+            float nextCheckAt = Time.time;
+            while (dependencies.Controller.IsBusy)
+            {
+                if (Time.time > deadline)
+                {
+                    dependencies.SetState?.Invoke(RobotRuntimeState.Stuck);
+                    Fail(context, MissionFailureReason.MoveTimeout, string.Format(
+                        "Timed out while waiting for {0}.",
+                        label));
+                    yield break;
+                }
+
+                if (Time.time >= nextCheckAt
+                    && IsPathBlockedByRobot(
+                        context,
+                        StudentConstants.NoStationId,
+                        targetPosition,
+                        out int blockingRobotId,
+                        out _,
+                        out _))
+                {
+                    LogMessage("Path", string.Format(
+                        "Detour stopped robot={0} task={1} label={2}; blockedBy robot={3}.",
+                        context.Request.robotId,
+                        context.Request.taskId,
+                        label,
+                        blockingRobotId));
+
+                    dependencies.Controller.MoveBaseTo(dependencies.Controller.Position);
+                    yield return WaitForControllerIdle(
+                        context,
+                        Mathf.Max(0.1f, settings.PathYieldMoveTimeoutSec),
+                        string.Format("detour stop during {0}", label));
+                    onArrived?.Invoke(false);
+                    yield break;
+                }
+
+                nextCheckAt = Time.time + Mathf.Max(0.01f, settings.BasePathCheckIntervalSec);
+                yield return null;
+            }
+
+            onArrived?.Invoke(true);
         }
 
         private Vector3[] BuildYieldCandidates(
@@ -971,6 +1267,8 @@ namespace CPS.ICPBL.Student
 
         private void Finish(MissionContext context, Action<MissionResult> onFinished)
         {
+            ClearActiveBasePath(context);
+
             if (context.Failed)
             {
                 CleanupFailure(context);

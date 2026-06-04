@@ -44,6 +44,8 @@ namespace CPS.ICPBL.Student
             ConveyorSnapshot bestSnapshot = null;
             float bestDeadline = float.PositiveInfinity;
             float bestDistanceCost = float.PositiveInfinity;
+            bool bestInPreferredRange = false;
+            bool bestHasPriorityQueue = false;
             bool useOfficialNextProductionTimes = CanUseOfficialNextProductionTimes(conveyors, pendingTasks);
 
             for (int i = 0; i < pendingTasks.Length; i++)
@@ -64,9 +66,16 @@ namespace CPS.ICPBL.Student
                     snapshot,
                     useOfficialNextProductionTimes);
                 float distanceCost = CalculateDistanceCost(snapshot.conveyorId, robot);
+                bool inPreferredRange = IsPreferredConveyorForRobot(
+                    robot.baseSnapshot.RobotId,
+                    snapshot.conveyorId);
+                bool hasPriorityQueue = HasPriorityQueue(snapshot);
                 task.priorityScore = -estimatedDeadline;
                 task.debugReason = BuildDebugReason(
                     snapshot,
+                    robot.baseSnapshot.RobotId,
+                    inPreferredRange,
+                    hasPriorityQueue,
                     estimatedDeadline,
                     distanceCost,
                     useOfficialNextProductionTimes);
@@ -76,15 +85,21 @@ namespace CPS.ICPBL.Student
                     snapshot,
                     estimatedDeadline,
                     distanceCost,
+                    inPreferredRange,
+                    hasPriorityQueue,
                     bestTask,
                     bestSnapshot,
                     bestDeadline,
-                    bestDistanceCost))
+                    bestDistanceCost,
+                    bestInPreferredRange,
+                    bestHasPriorityQueue))
                 {
                     bestTask = task;
                     bestSnapshot = snapshot;
                     bestDeadline = estimatedDeadline;
                     bestDistanceCost = distanceCost;
+                    bestInPreferredRange = inPreferredRange;
+                    bestHasPriorityQueue = hasPriorityQueue;
                 }
             }
 
@@ -156,6 +171,26 @@ namespace CPS.ICPBL.Student
             return snapshot.queueLength >= StudentConstants.ConveyorQueueCapacity;
         }
 
+        private static bool HasPriorityQueue(ConveyorSnapshot snapshot)
+        {
+            return snapshot.queueLength >= 2;
+        }
+
+        private static bool IsPreferredConveyorForRobot(int robotId, int conveyorId)
+        {
+            if (robotId == StudentConstants.RobotAId)
+            {
+                return conveyorId >= 1 && conveyorId <= 5;
+            }
+
+            if (robotId == StudentConstants.RobotBId)
+            {
+                return conveyorId >= 6 && conveyorId <= 10;
+            }
+
+            return false;
+        }
+
         private static float CalculateEstimatedSaturationDeadline(
             ConveyorSnapshot snapshot,
             bool useOfficialNextProductionTimes)
@@ -195,11 +230,30 @@ namespace CPS.ICPBL.Student
             ConveyorSnapshot candidateSnapshot,
             float candidateDeadline,
             float candidateDistanceCost,
+            bool candidateInPreferredRange,
+            bool candidateHasPriorityQueue,
             WorkTask bestTask,
             ConveyorSnapshot bestSnapshot,
             float bestDeadline,
-            float bestDistanceCost)
+            float bestDistanceCost,
+            bool bestInPreferredRange,
+            bool bestHasPriorityQueue)
         {
+            if (candidateHasPriorityQueue != bestHasPriorityQueue)
+            {
+                return candidateHasPriorityQueue;
+            }
+
+            if (candidateInPreferredRange != bestInPreferredRange)
+            {
+                return candidateInPreferredRange;
+            }
+
+            if (candidateSnapshot.queueLength != bestSnapshot.queueLength)
+            {
+                return candidateSnapshot.queueLength > bestSnapshot.queueLength;
+            }
+
             bool candidateIsFull = IsFull(candidateSnapshot);
             bool bestIsFull = IsFull(bestSnapshot);
             if (candidateIsFull != bestIsFull)
@@ -237,6 +291,9 @@ namespace CPS.ICPBL.Student
 
         private static string BuildDebugReason(
             ConveyorSnapshot snapshot,
+            int robotId,
+            bool inPreferredRange,
+            bool hasPriorityQueue,
             float estimatedDeadline,
             float distanceCost,
             bool useOfficialNextProductionTimes)
@@ -245,10 +302,13 @@ namespace CPS.ICPBL.Student
                 ? "queue-full"
                 : useOfficialNextProductionTimes ? "next-production" : "period-fallback";
             return string.Format(
-                "policy=non-preemptive-edf, saturationDeadline={0:0.##}, source={1}, queue={2}, period={3:0.##}, distanceTieCost={4:0.##}",
+                "policy=queue2-first-robot-range, robot={0}, priorityQueue={1}, preferredRange={2}, queue={3}, saturationDeadline={4:0.##}, source={5}, period={6:0.##}, distanceTieCost={7:0.##}",
+                robotId,
+                hasPriorityQueue,
+                inPreferredRange,
+                snapshot.queueLength,
                 estimatedDeadline,
                 deadlineSource,
-                snapshot.queueLength,
                 snapshot.productionPeriod,
                 distanceCost);
         }
