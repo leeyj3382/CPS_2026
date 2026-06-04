@@ -6,6 +6,8 @@ namespace CPS.ICPBL.Student
 {
     public class Palletizer : MonoBehaviour, IPalletizer
     {
+        private const float MinSlotSpacing = 0.01f;
+
         private enum SlotState
         {
             Free = 0,
@@ -20,6 +22,20 @@ namespace CPS.ICPBL.Student
             public int RobotId;
         }
 
+        private struct SlotGrid
+        {
+            public int MajorCount;
+            public int MinorCount;
+            public int Layers;
+            public bool MajorAxisIsX;
+            public float MajorStart;
+            public float MinorStart;
+            public float MajorStep;
+            public float MinorStep;
+            public float LayerStartY;
+            public float StepY;
+        }
+
         [Header("Pose Source")]
         [SerializeField] private PoseTable poseTable;
 
@@ -29,14 +45,17 @@ namespace CPS.ICPBL.Student
         [SerializeField] private bool registerBoxTriggerOnCommit = true;
 
         [Header("Slot Grid")]
-        [SerializeField] private int columns = 4;
-        [SerializeField] private int rows = 3;
+        [SerializeField] private int columns = 6;
+        [SerializeField] private int rows = 4;
         [SerializeField] private int normalSlotCount = 52;
         [SerializeField] private int abnormalSlotCount = 12;
         [SerializeField] private Vector3 slotSpacing = new Vector3(0.32f, 0f, 0.32f);
         [SerializeField] private float layerHeight = 0.22f;
-        [SerializeField] private Vector3 normalGridOriginOffset = new Vector3(-0.48f, 0f, -0.32f);
-        [SerializeField] private Vector3 abnormalGridOriginOffset = new Vector3(-0.48f, 0f, -0.32f);
+        [SerializeField] private Vector3 normalGridOriginOffset = new Vector3(-0.8f, 0f, -0.48f);
+        [SerializeField] private Vector3 abnormalGridOriginOffset = new Vector3(-0.8f, 0f, -0.48f);
+        [SerializeField] private bool fitGridToBoxBounds = true;
+        [SerializeField] private float horizontalPadding = 0.1f;
+        [SerializeField] private float verticalPadding = 0.02f;
 
         [Header("Place Offsets")]
         [SerializeField] private Vector3 placeApproachOffset = new Vector3(0f, 0.35f, 0f);
@@ -77,6 +96,11 @@ namespace CPS.ICPBL.Student
             for (int slotIndex = 0; slotIndex < slots.Length; slotIndex++)
             {
                 if (slots[slotIndex] != SlotState.Free)
+                {
+                    continue;
+                }
+
+                if (!IsSlotWithinCalculatedCapacity(boxType, slotIndex))
                 {
                     continue;
                 }
@@ -180,7 +204,11 @@ namespace CPS.ICPBL.Student
             rows = Mathf.Max(1, rows);
             normalSlotCount = Mathf.Max(1, normalSlotCount);
             abnormalSlotCount = Mathf.Max(1, abnormalSlotCount);
-            layerHeight = Mathf.Max(0f, layerHeight);
+            slotSpacing.x = Mathf.Max(MinSlotSpacing, slotSpacing.x);
+            slotSpacing.z = Mathf.Max(MinSlotSpacing, slotSpacing.z);
+            layerHeight = Mathf.Max(MinSlotSpacing, layerHeight);
+            horizontalPadding = Mathf.Max(0f, horizontalPadding);
+            verticalPadding = Mathf.Max(0f, verticalPadding);
             gizmoRadius = Mathf.Max(0.01f, gizmoRadius);
         }
 
@@ -252,15 +280,29 @@ namespace CPS.ICPBL.Student
 
         private Vector3 GetSlotWorldPosition(BoxType boxType, int slotIndex)
         {
-            PoseTable table = ResolvePoseTable();
-            if (table == null)
+            if (ResolvePoseTable() == null)
             {
                 Debug.LogWarning("[Palletizer] PoseTable reference is missing; using Vector3.zero as box base.");
-                return GetGridOffset(boxType, slotIndex);
             }
 
-            StationPose boxPose = table.GetBoxBasePose(boxType);
-            return boxPose.actionPos + GetGridOffset(boxType, slotIndex);
+            if (fitGridToBoxBounds && TryGetBoxBounds(boxType, out Bounds boxBounds))
+            {
+                SlotGrid grid = BuildBoundsGrid(boxType, boxBounds);
+                return GetGridPosition(grid, slotIndex);
+            }
+
+            Vector3 basePosition = Vector3.zero;
+            PoseTable table = ResolvePoseTable();
+            if (table != null)
+            {
+                StationPose boxPose = table.GetBoxBasePose(boxType);
+                if (boxPose != null)
+                {
+                    basePosition = boxPose.actionPos;
+                }
+            }
+
+            return basePosition + GetGridOffset(boxType, slotIndex);
         }
 
         private Vector3 GetGridOffset(BoxType boxType, int slotIndex)
@@ -278,6 +320,121 @@ namespace CPS.ICPBL.Student
                 column * slotSpacing.x,
                 layerIndex * layerHeight,
                 row * slotSpacing.z);
+        }
+
+        private SlotGrid BuildBoundsGrid(BoxType boxType, Bounds boxBounds)
+        {
+            float stepX = Mathf.Max(MinSlotSpacing, slotSpacing.x);
+            float stepZ = Mathf.Max(MinSlotSpacing, slotSpacing.z);
+            float stepY = Mathf.Max(MinSlotSpacing, layerHeight);
+            int xCount = CalculateSlotCount(boxBounds.size.x, stepX, horizontalPadding);
+            int zCount = CalculateSlotCount(boxBounds.size.z, stepZ, horizontalPadding);
+            bool majorAxisIsX = boxBounds.size.x >= boxBounds.size.z;
+
+            int majorCount = majorAxisIsX ? xCount : zCount;
+            int minorCount = majorAxisIsX ? zCount : xCount;
+            float majorStep = majorAxisIsX ? stepX : stepZ;
+            float minorStepMagnitude = majorAxisIsX ? stepZ : stepX;
+            float majorStart = majorAxisIsX
+                ? boxBounds.min.x + horizontalPadding
+                : boxBounds.min.z + horizontalPadding;
+            float minorStart = GetOutsideMinorStart(boxType, boxBounds, majorAxisIsX);
+            float minorStep = GetOutsideMinorStep(boxType, majorAxisIsX, minorStepMagnitude);
+
+            return new SlotGrid
+            {
+                MajorCount = majorCount,
+                MinorCount = minorCount,
+                Layers = CalculateSlotCount(boxBounds.size.y, stepY, verticalPadding),
+                MajorAxisIsX = majorAxisIsX,
+                MajorStart = majorStart,
+                MinorStart = minorStart,
+                MajorStep = majorStep,
+                MinorStep = minorStep,
+                LayerStartY = boxBounds.min.y + verticalPadding,
+                StepY = stepY
+            };
+        }
+
+        private static Vector3 GetGridPosition(SlotGrid grid, int slotIndex)
+        {
+            int footprintCount = Mathf.Max(1, grid.MajorCount * grid.MinorCount);
+            int footprintIndex = slotIndex % footprintCount;
+            int layerIndex = slotIndex / footprintCount;
+            int majorIndex = footprintIndex % grid.MajorCount;
+            int minorIndex = footprintIndex / grid.MajorCount;
+            float major = grid.MajorStart + (majorIndex * grid.MajorStep);
+            float minor = grid.MinorStart + (minorIndex * grid.MinorStep);
+            float y = grid.LayerStartY + (layerIndex * grid.StepY);
+
+            return grid.MajorAxisIsX
+                ? new Vector3(major, y, minor)
+                : new Vector3(minor, y, major);
+        }
+
+        private float GetOutsideMinorStart(BoxType boxType, Bounds boxBounds, bool majorAxisIsX)
+        {
+            if (boxType == BoxType.Normal)
+            {
+                return majorAxisIsX
+                    ? boxBounds.max.z - horizontalPadding
+                    : boxBounds.min.x + horizontalPadding;
+            }
+
+            if (boxType == BoxType.Abnormal)
+            {
+                return majorAxisIsX
+                    ? boxBounds.min.z + horizontalPadding
+                    : boxBounds.min.x + horizontalPadding;
+            }
+
+            return majorAxisIsX
+                ? boxBounds.min.z + horizontalPadding
+                : boxBounds.min.x + horizontalPadding;
+        }
+
+        private static float GetOutsideMinorStep(
+            BoxType boxType,
+            bool majorAxisIsX,
+            float stepMagnitude)
+        {
+            if (boxType == BoxType.Normal && majorAxisIsX)
+            {
+                return -stepMagnitude;
+            }
+
+            return stepMagnitude;
+        }
+
+        private static int CalculateSlotCount(float size, float spacing, float padding)
+        {
+            float usableCenterSpan = Mathf.Max(0f, size - (padding * 2f));
+            return Mathf.Max(1, Mathf.FloorToInt(usableCenterSpan / spacing) + 1);
+        }
+
+        private bool TryGetBoxBounds(BoxType boxType, out Bounds bounds)
+        {
+            BoxTrigger trigger = GetBoxTrigger(boxType);
+            if (trigger != null && trigger.TryGetComponent(out BoxCollider boxCollider))
+            {
+                bounds = boxCollider.bounds;
+                return true;
+            }
+
+            bounds = default;
+            return false;
+        }
+
+        private bool IsSlotWithinCalculatedCapacity(BoxType boxType, int slotIndex)
+        {
+            if (!fitGridToBoxBounds || !TryGetBoxBounds(boxType, out Bounds boxBounds))
+            {
+                return true;
+            }
+
+            SlotGrid grid = BuildBoundsGrid(boxType, boxBounds);
+            int capacity = Mathf.Max(1, grid.MajorCount * grid.MinorCount * grid.Layers);
+            return slotIndex < capacity;
         }
 
         private void RegisterBoxTriggerSlot(BoxType boxType, int slotIndex)
