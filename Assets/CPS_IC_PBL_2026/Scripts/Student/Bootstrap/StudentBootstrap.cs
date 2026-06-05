@@ -85,6 +85,7 @@ namespace CPS.ICPBL.Student
                 Warn(string.Format("{0} has missing robot references.", label));
             }
 
+            agent.ConfigureEnvironmentInfo(sceneReferences.EnvironmentInfo);
             agent.Configure(
                 controller,
                 gripper,

@@ -113,6 +113,46 @@ namespace CPS.ICPBL.Student.Tests
         }
 
         [Test]
+        public void RunSchedulingCycle_AnticipatesConveyorTwoWhenConveyorOneAppears()
+        {
+            var robotA = new FakeRobotAgent(StudentConstants.RobotAId);
+            var robotB = new FakeRobotAgent(StudentConstants.RobotBId);
+            environment.CurrentTime = 15f;
+            environment.SetQueueLength(1, 1);
+            fleetManager.ConfigureRobotAgents(robotA, robotB);
+
+            fleetManager.RunSchedulingCycle();
+
+            Assert.That(robotA.DispatchCount, Is.EqualTo(1));
+            Assert.That(robotA.LastRequest.conveyorId, Is.EqualTo(1));
+            Assert.That(robotB.DispatchCount, Is.EqualTo(1));
+            Assert.That(robotB.LastRequest.conveyorId, Is.EqualTo(2));
+            Assert.That(fleetManager.Tasks, Has.Count.EqualTo(2));
+            Assert.That(fleetManager.Tasks[1].anticipated, Is.True);
+            Assert.That(fleetManager.Tasks[1].expectedAvailableAt, Is.EqualTo(18f).Within(0.001f));
+        }
+
+        [Test]
+        public void RunSchedulingCycle_FirstWaveDispatchesConveyorsOneAndTwoBeforeThreeAndFour()
+        {
+            var robotA = new FakeRobotAgent(StudentConstants.RobotAId);
+            var robotB = new FakeRobotAgent(StudentConstants.RobotBId);
+            environment.CurrentTime = 20f;
+            environment.SetQueueLength(1, 1);
+            environment.SetQueueLength(2, 1);
+            environment.SetQueueLength(3, 1);
+            environment.SetQueueLength(4, 1);
+            fleetManager.ConfigureRobotAgents(robotA, robotB);
+
+            fleetManager.RunSchedulingCycle();
+
+            Assert.That(robotA.DispatchCount, Is.EqualTo(1));
+            Assert.That(robotA.LastRequest.conveyorId, Is.EqualTo(1));
+            Assert.That(robotB.DispatchCount, Is.EqualTo(1));
+            Assert.That(robotB.LastRequest.conveyorId, Is.EqualTo(2));
+        }
+
+        [Test]
         public void MissionCompletion_ReleasesReservationAndCompletesTask()
         {
             var robot = new FakeRobotAgent(StudentConstants.RobotAId);
