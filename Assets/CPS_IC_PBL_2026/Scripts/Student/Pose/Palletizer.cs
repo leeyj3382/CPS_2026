@@ -53,8 +53,12 @@ namespace CPS.ICPBL.Student
         [SerializeField] private float layerHeight = 0.22f;
         [SerializeField] private Vector3 normalGridOriginOffset = new Vector3(-0.8f, 0f, -0.48f);
         [SerializeField] private Vector3 abnormalGridOriginOffset = new Vector3(-0.8f, 0f, -0.48f);
+        [SerializeField] private int normalMinimumMajorSlots = 4;
+        [SerializeField] private int normalMinimumMinorSlots = 4;
+        [SerializeField] private float normalGridYawDegrees;
+        [SerializeField] private float abnormalGridYawDegrees;
         [SerializeField] private bool fitGridToBoxBounds = true;
-        [SerializeField] private float horizontalPadding = 0.1f;
+        [SerializeField] private float horizontalPadding = 0.16f;
         [SerializeField] private float verticalPadding = 0.02f;
 
         [Header("Place Offsets")]
@@ -204,6 +208,8 @@ namespace CPS.ICPBL.Student
             rows = Mathf.Max(1, rows);
             normalSlotCount = Mathf.Max(1, normalSlotCount);
             abnormalSlotCount = Mathf.Max(1, abnormalSlotCount);
+            normalMinimumMajorSlots = Mathf.Max(1, normalMinimumMajorSlots);
+            normalMinimumMinorSlots = Mathf.Max(1, normalMinimumMinorSlots);
             slotSpacing.x = Mathf.Max(MinSlotSpacing, slotSpacing.x);
             slotSpacing.z = Mathf.Max(MinSlotSpacing, slotSpacing.z);
             layerHeight = Mathf.Max(MinSlotSpacing, layerHeight);
@@ -288,7 +294,7 @@ namespace CPS.ICPBL.Student
             if (fitGridToBoxBounds && TryGetBoxBounds(boxType, out Bounds boxBounds))
             {
                 SlotGrid grid = BuildBoundsGrid(boxType, boxBounds);
-                return GetGridPosition(grid, slotIndex);
+                return ApplyGridYaw(boxType, GetGridPosition(grid, slotIndex), boxBounds.center);
             }
 
             Vector3 basePosition = Vector3.zero;
@@ -302,7 +308,10 @@ namespace CPS.ICPBL.Student
                 }
             }
 
-            return basePosition + GetGridOffset(boxType, slotIndex);
+            return ApplyGridYaw(
+                boxType,
+                basePosition + GetGridOffset(boxType, slotIndex),
+                basePosition);
         }
 
         private Vector3 GetGridOffset(BoxType boxType, int slotIndex)
@@ -341,6 +350,27 @@ namespace CPS.ICPBL.Student
             float minorStart = GetOutsideMinorStart(boxType, boxBounds, majorAxisIsX);
             float minorStep = GetOutsideMinorStep(boxType, majorAxisIsX, minorStepMagnitude);
 
+            if (boxType == BoxType.Normal && majorCount < normalMinimumMajorSlots)
+            {
+                majorCount = normalMinimumMajorSlots;
+                majorStep = CalculateFittedStep(
+                    majorAxisIsX ? boxBounds.size.x : boxBounds.size.z,
+                    horizontalPadding,
+                    majorCount,
+                    majorStep);
+            }
+
+            if (boxType == BoxType.Normal && minorCount < normalMinimumMinorSlots)
+            {
+                minorCount = normalMinimumMinorSlots;
+                float fittedMinorStep = CalculateFittedStep(
+                    majorAxisIsX ? boxBounds.size.z : boxBounds.size.x,
+                    horizontalPadding,
+                    minorCount,
+                    minorStepMagnitude);
+                minorStep = GetOutsideMinorStep(boxType, majorAxisIsX, fittedMinorStep);
+            }
+
             return new SlotGrid
             {
                 MajorCount = majorCount,
@@ -370,6 +400,21 @@ namespace CPS.ICPBL.Student
             return grid.MajorAxisIsX
                 ? new Vector3(major, y, minor)
                 : new Vector3(minor, y, major);
+        }
+
+        private Vector3 ApplyGridYaw(BoxType boxType, Vector3 position, Vector3 pivot)
+        {
+            float yawDegrees = boxType == BoxType.Normal
+                ? normalGridYawDegrees
+                : abnormalGridYawDegrees;
+            if (Mathf.Approximately(yawDegrees, 0f))
+            {
+                return position;
+            }
+
+            Vector3 offset = position - pivot;
+            offset = Quaternion.Euler(0f, yawDegrees, 0f) * offset;
+            return pivot + offset;
         }
 
         private float GetOutsideMinorStart(BoxType boxType, Bounds boxBounds, bool majorAxisIsX)
@@ -410,6 +455,21 @@ namespace CPS.ICPBL.Student
         {
             float usableCenterSpan = Mathf.Max(0f, size - (padding * 2f));
             return Mathf.Max(1, Mathf.FloorToInt(usableCenterSpan / spacing) + 1);
+        }
+
+        private static float CalculateFittedStep(
+            float size,
+            float padding,
+            int count,
+            float fallbackStep)
+        {
+            if (count <= 1)
+            {
+                return fallbackStep;
+            }
+
+            float usableCenterSpan = Mathf.Max(MinSlotSpacing, size - (padding * 2f));
+            return Mathf.Max(MinSlotSpacing, usableCenterSpan / (count - 1));
         }
 
         private bool TryGetBoxBounds(BoxType boxType, out Bounds bounds)

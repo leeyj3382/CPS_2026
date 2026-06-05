@@ -58,7 +58,7 @@ namespace CPS.ICPBL.Student
                 }
 
                 ConveyorSnapshot snapshot = FindSnapshot(conveyors, task.conveyorId);
-                if (!IsEligible(snapshot))
+                if (!IsEligible(snapshot, task))
                 {
                     continue;
                 }
@@ -133,11 +133,11 @@ namespace CPS.ICPBL.Student
             return null;
         }
 
-        private static bool IsEligible(ConveyorSnapshot snapshot)
+        private static bool IsEligible(ConveyorSnapshot snapshot, WorkTask task)
         {
             return snapshot != null
                 && StudentConstants.IsConveyorId(snapshot.conveyorId)
-                && snapshot.queueLength > 0
+                && (snapshot.queueLength > 0 || (task != null && task.anticipated))
                 && snapshot.productionPeriod > 0f
                 && !snapshot.isReserved;
         }
@@ -157,7 +157,7 @@ namespace CPS.ICPBL.Student
                 }
 
                 ConveyorSnapshot snapshot = FindSnapshot(conveyors, task.conveyorId);
-                if (!IsEligible(snapshot) || IsFull(snapshot))
+                if (!IsEligible(snapshot, task) || IsFull(snapshot))
                 {
                     continue;
                 }
@@ -226,7 +226,7 @@ namespace CPS.ICPBL.Student
             }
 
             float leadTime = 0f;
-            if (IsCentralDropRiskConveyor(snapshot.conveyorId))
+            if (snapshot.queueLength >= 2 && IsCentralDropRiskConveyor(snapshot.conveyorId))
             {
                 leadTime += snapshot.productionPeriod;
             }

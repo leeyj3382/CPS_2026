@@ -32,6 +32,8 @@ namespace CPS.ICPBL.Student
         public int assignedRobotId = StudentConstants.UnassignedRobotId;
         public float createdAt;
         public float assignedAt;
+        public bool anticipated;
+        public float expectedAvailableAt;
         public float priorityScore;
         public TaskStatus status;
         public int retryCount;

@@ -52,6 +52,10 @@ namespace CPS.ICPBL.Student
         [SerializeField, Min(0f)] private float pathStartPriorityMarginSec = 0.15f;
         [SerializeField, Min(0.1f)] private float activePathStaleSec = 45f;
 
+        [Header("Traffic Priority")]
+        [SerializeField] private int defaultPriorityRobotId = StudentConstants.RobotAId;
+        [SerializeField] private bool defaultPriorityRobotWinsTies = true;
+
         [Header("Lane Routing")]
         [SerializeField] private bool enableLaneRouting = false;
         [SerializeField] private float robotALaneX = -7.2f;
@@ -257,16 +261,6 @@ namespace CPS.ICPBL.Student
             }
 
             int targetBoxStationId = GetTargetBoxStationId(targetStationId, to);
-            if (IsSameBoxClaimedByEarlierPath(
-                robotId,
-                targetBoxStationId,
-                out int sameBoxBlockingRobotId))
-            {
-                blockingRobotId = sameBoxBlockingRobotId;
-                waitForSameBox = true;
-                return true;
-            }
-
             for (int i = 0; i < robotControllers.Length; i++)
             {
                 IRobotController controller = robotControllers[i];
@@ -286,12 +280,7 @@ namespace CPS.ICPBL.Student
                     float workerDistanceToPath = PointSegmentDistanceXZ(controller.Position, from, to);
                     if (targetBoxStationId == workingBoxStationId)
                     {
-                        if ((CurrentRobotHasSameBoxPriority(
-                            robotId,
-                            targetBoxStationId,
-                            controller.RobotId)
-                            || CurrentRobotHasTrafficPriority(robotId, controller.RobotId))
-                            && workerDistanceToPath > hardStationaryClearanceRadius)
+                        if (workerDistanceToPath > hardStationaryClearanceRadius)
                         {
                             continue;
                         }
@@ -303,8 +292,14 @@ namespace CPS.ICPBL.Student
 
                     if (workerDistanceToPath <= stationaryWorkClearanceRadius)
                     {
-                        if (CurrentRobotHasTrafficPriority(robotId, controller.RobotId)
-                            && workerDistanceToPath > hardStationaryClearanceRadius)
+                        if ((CurrentRobotHasTrafficPriority(robotId, controller.RobotId)
+                                && workerDistanceToPath > hardStationaryClearanceRadius)
+                            || CurrentRobotCanProceedPastLowerPriority(
+                                robotId,
+                                controller.RobotId,
+                                from,
+                                to,
+                                controller.Position))
                         {
                             continue;
                         }
@@ -319,8 +314,14 @@ namespace CPS.ICPBL.Student
                 if (isBlockingConveyorWork
                     && conveyorWorkDistanceToPath <= stationaryWorkClearanceRadius)
                 {
-                    if (CurrentRobotHasTrafficPriority(robotId, controller.RobotId)
-                        && conveyorWorkDistanceToPath > hardStationaryClearanceRadius)
+                    if ((CurrentRobotHasTrafficPriority(robotId, controller.RobotId)
+                            && conveyorWorkDistanceToPath > hardStationaryClearanceRadius)
+                        || CurrentRobotCanProceedPastLowerPriority(
+                            robotId,
+                            controller.RobotId,
+                            from,
+                            to,
+                            controller.Position))
                     {
                         continue;
                     }
@@ -349,6 +350,14 @@ namespace CPS.ICPBL.Student
                     : stationaryWorkClearanceRadius;
                 if (distanceToPath <= threshold)
                 {
+                    if (CurrentPayloadCanQueueForBox(
+                        robotId,
+                        targetBoxStationId,
+                        distanceToPath))
+                    {
+                        continue;
+                    }
+
                     if (CurrentRobotHasSameBoxPriority(
                         robotId,
                         targetBoxStationId,
@@ -358,9 +367,15 @@ namespace CPS.ICPBL.Student
                         continue;
                     }
 
-                    if ((CurrentRobotHasTrafficPriority(robotId, controller.RobotId)
-                        || EmptyRobotHasPriority(robotId, controller.RobotId))
-                        && distanceToPath > hardStationaryClearanceRadius)
+                    if (((CurrentRobotHasTrafficPriority(robotId, controller.RobotId)
+                            || EmptyRobotHasPriority(robotId, controller.RobotId))
+                            && distanceToPath > hardStationaryClearanceRadius)
+                        || CurrentRobotCanProceedPastLowerPriority(
+                            robotId,
+                            controller.RobotId,
+                            from,
+                            to,
+                            controller.Position))
                     {
                         continue;
                     }
@@ -606,6 +621,11 @@ namespace CPS.ICPBL.Student
             crossingPriorityMargin = Mathf.Max(0.8f, crossingPriorityMargin);
             pathStartPriorityMarginSec = Mathf.Max(0f, pathStartPriorityMarginSec);
             activePathStaleSec = Mathf.Max(0.1f, activePathStaleSec);
+            if (!StudentConstants.IsRobotId(defaultPriorityRobotId))
+            {
+                defaultPriorityRobotId = StudentConstants.RobotAId;
+            }
+
             waypointMergeDistance = Mathf.Max(0.1f, waypointMergeDistance);
             detourDistance = Mathf.Max(4.5f, detourDistance);
             boxKeepOutRadius = Mathf.Max(2.25f, boxKeepOutRadius);
@@ -702,8 +722,14 @@ namespace CPS.ICPBL.Student
                     : stationaryWorkClearanceRadius;
                 if (distanceToPath <= clearanceRadius)
                 {
-                    if (CurrentRobotHasTrafficPriority(robotId, controller.RobotId)
-                        && distanceToPath > hardStationaryClearanceRadius)
+                    if ((CurrentRobotHasTrafficPriority(robotId, controller.RobotId)
+                            && distanceToPath > hardStationaryClearanceRadius)
+                        || CurrentRobotCanProceedPastLowerPriority(
+                            robotId,
+                            controller.RobotId,
+                            from,
+                            to,
+                            otherPosition))
                     {
                         continue;
                     }
@@ -801,7 +827,7 @@ namespace CPS.ICPBL.Student
                     || OtherEmptyRobotHasPriority(robotId, other.RobotId)
                     || otherDistanceToCrossing + crossingPriorityMargin < myDistanceToCrossing
                     || (Mathf.Abs(otherDistanceToCrossing - myDistanceToCrossing) <= crossingPriorityMargin
-                        && other.RobotId < robotId));
+                        && OtherRobotWinsUnassignedPriority(robotId, other.RobotId)));
 
                 if (currentHasTrafficPriority
                     || currentHasSameBoxPriority
@@ -921,16 +947,57 @@ namespace CPS.ICPBL.Student
             return RobotHasPayload(robotId) && !RobotHasPayload(otherRobotId);
         }
 
-        private static bool CurrentRobotHasTrafficPriority(int robotId, int otherRobotId)
+        private bool CurrentRobotHasTrafficPriority(int robotId, int otherRobotId)
         {
-            return robotId == StudentConstants.RobotAId
-                && otherRobotId == StudentConstants.RobotBId;
+            return defaultPriorityRobotWinsTies
+                && robotId == defaultPriorityRobotId
+                && otherRobotId != defaultPriorityRobotId;
         }
 
-        private static bool OtherRobotHasTrafficPriority(int robotId, int otherRobotId)
+        private bool OtherRobotHasTrafficPriority(int robotId, int otherRobotId)
         {
-            return robotId == StudentConstants.RobotBId
-                && otherRobotId == StudentConstants.RobotAId;
+            return defaultPriorityRobotWinsTies
+                && otherRobotId == defaultPriorityRobotId
+                && robotId != defaultPriorityRobotId;
+        }
+
+        private bool CurrentRobotWinsUnassignedPriority(int robotId, int otherRobotId)
+        {
+            if (robotId == otherRobotId)
+            {
+                return false;
+            }
+
+            if (defaultPriorityRobotWinsTies)
+            {
+                if (robotId == defaultPriorityRobotId && otherRobotId != defaultPriorityRobotId)
+                {
+                    return true;
+                }
+
+                if (otherRobotId == defaultPriorityRobotId && robotId != defaultPriorityRobotId)
+                {
+                    return false;
+                }
+            }
+
+            return robotId < otherRobotId;
+        }
+
+        private bool OtherRobotWinsUnassignedPriority(int robotId, int otherRobotId)
+        {
+            return robotId != otherRobotId
+                && !CurrentRobotWinsUnassignedPriority(robotId, otherRobotId);
+        }
+
+        private bool CurrentPayloadCanQueueForBox(
+            int robotId,
+            int targetBoxStationId,
+            float distanceToOtherPathOrRobot)
+        {
+            return StudentConstants.IsBoxStationId(targetBoxStationId)
+                && RobotHasPayload(robotId)
+                && distanceToOtherPathOrRobot > hardStationaryClearanceRadius;
         }
 
         private bool RobotHasPayload(int robotId)
@@ -1006,59 +1073,6 @@ namespace CPS.ICPBL.Student
             return StudentConstants.NoStationId;
         }
 
-        private bool IsSameBoxClaimedByEarlierPath(
-            int robotId,
-            int targetBoxStationId,
-            out int blockingRobotId)
-        {
-            blockingRobotId = StudentConstants.UnassignedRobotId;
-            if (!StudentConstants.IsBoxStationId(targetBoxStationId)
-                || activeBasePaths.Count == 0)
-            {
-                return false;
-            }
-
-            PurgeStaleActivePaths();
-
-            activeBasePaths.TryGetValue(robotId, out ActiveBasePath mine);
-            foreach (KeyValuePair<int, ActiveBasePath> pair in activeBasePaths)
-            {
-                ActiveBasePath other = pair.Value;
-                if (other == null || other.RobotId == robotId)
-                {
-                    continue;
-                }
-
-                int otherTargetBoxStationId = GetTargetBoxStationId(
-                    StudentConstants.NoStationId,
-                    other.To);
-                if (otherTargetBoxStationId != targetBoxStationId)
-                {
-                    continue;
-                }
-
-                if (CurrentRobotHasTrafficPriority(robotId, other.RobotId))
-                {
-                    continue;
-                }
-
-                bool otherHasPriority = OtherRobotHasTrafficPriority(robotId, other.RobotId)
-                    || mine == null
-                    || other.StartedAt + pathStartPriorityMarginSec < mine.StartedAt
-                    || (Mathf.Abs(other.StartedAt - mine.StartedAt) <= pathStartPriorityMarginSec
-                        && other.RobotId < robotId);
-                if (!otherHasPriority)
-                {
-                    continue;
-                }
-
-                blockingRobotId = other.RobotId;
-                return true;
-            }
-
-            return false;
-        }
-
         private bool CurrentRobotHasSameBoxPriority(
             int robotId,
             int targetBoxStationId,
@@ -1109,7 +1123,7 @@ namespace CPS.ICPBL.Student
                 return false;
             }
 
-            return robotId < otherRobotId;
+            return CurrentRobotWinsUnassignedPriority(robotId, otherRobotId);
         }
 
         private static Vector3 GetBoxStationPosition(int stationId)
@@ -1185,7 +1199,26 @@ namespace CPS.ICPBL.Student
                 return false;
             }
 
+            Vector2 awayFromOther = ToXZ(from) - ToXZ(otherPosition);
+            Vector2 path = ToXZ(to) - ToXZ(from);
+            if (path.sqrMagnitude <= Mathf.Epsilon
+                || Vector2.Dot(awayFromOther, path) <= 0f)
+            {
+                return false;
+            }
+
             return DistanceXZ(to, otherPosition) > startDistance + 0.25f;
+        }
+
+        private bool CurrentRobotCanProceedPastLowerPriority(
+            int robotId,
+            int otherRobotId,
+            Vector3 from,
+            Vector3 to,
+            Vector3 otherPosition)
+        {
+            return CurrentRobotHasTrafficPriority(robotId, otherRobotId)
+                && MovingAwayFromNearbyRobot(from, to, otherPosition);
         }
 
         private float GetLaneX(int robotId, int stationId)
