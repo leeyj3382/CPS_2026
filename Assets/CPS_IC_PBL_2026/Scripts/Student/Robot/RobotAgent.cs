@@ -55,6 +55,7 @@ namespace CPS.ICPBL.Student
         private ITelemetryLogger telemetryLogger;
         private Coroutine activeMission;
         private int currentStationId = StudentConstants.NoStationId;
+        private bool waitingForPayloadRecovery;
 
         public int RobotId
         {
@@ -65,7 +66,12 @@ namespace CPS.ICPBL.Student
 
         public bool CanAcceptTask
         {
-            get { return activeMission == null && State == RobotRuntimeState.Idle; }
+            get
+            {
+                return activeMission == null
+                    && State == RobotRuntimeState.Idle
+                    && !HasHeldPayload();
+            }
         }
 
         public int CurrentStationId
@@ -76,6 +82,17 @@ namespace CPS.ICPBL.Student
         private void Awake()
         {
             ResolveSerializedReferences();
+        }
+
+        private void Update()
+        {
+            if (!waitingForPayloadRecovery || activeMission != null || HasHeldPayload())
+            {
+                return;
+            }
+
+            waitingForPayloadRecovery = false;
+            SetState(RobotRuntimeState.Idle);
         }
 
         private void OnValidate()
@@ -212,12 +229,14 @@ namespace CPS.ICPBL.Student
 
         public void StartMission(MissionRequest request, Action<MissionResult> onFinished)
         {
-            if (activeMission != null || State != RobotRuntimeState.Idle)
+            if (activeMission != null || State != RobotRuntimeState.Idle || HasHeldPayload())
             {
                 MissionResult busyResult = CreateImmediateFailure(
                     request,
                     MissionFailureReason.Unknown,
-                    "RobotAgent is already running a mission.");
+                    HasHeldPayload()
+                        ? "RobotAgent is holding an unresolved payload."
+                        : "RobotAgent is already running a mission.");
                 InvokeFinishedSafely(onFinished, busyResult);
                 return;
             }
@@ -301,7 +320,26 @@ namespace CPS.ICPBL.Student
             }
 
             activeMission = null;
-            SetState(result.success ? RobotRuntimeState.Completed : RobotRuntimeState.Failed);
+            if (result.success)
+            {
+                waitingForPayloadRecovery = false;
+                SetState(RobotRuntimeState.Completed);
+                SetState(RobotRuntimeState.Idle);
+                InvokeFinishedSafely(onFinished, result);
+                yield break;
+            }
+
+            SetState(RobotRuntimeState.Failed);
+            if (HasHeldPayload())
+            {
+                waitingForPayloadRecovery = true;
+                LogWarning(
+                    "Mission failed while the gripper is still holding a payload. Robot remains Failed until the payload is recovered or released.");
+                InvokeFinishedSafely(onFinished, result);
+                yield break;
+            }
+
+            waitingForPayloadRecovery = false;
             SetState(RobotRuntimeState.Idle);
             InvokeFinishedSafely(onFinished, result);
         }
@@ -439,6 +477,23 @@ namespace CPS.ICPBL.Student
             else if (logWithoutTelemetry)
             {
                 Debug.Log(string.Format("[RobotAgent] {0}", message), this);
+            }
+        }
+
+        private bool HasHeldPayload()
+        {
+            return suctionGripper != null && suctionGripper.IsHolding;
+        }
+
+        private void LogWarning(string message)
+        {
+            if (telemetryLogger != null)
+            {
+                telemetryLogger.LogMessage("Robot", message);
+            }
+            else if (logWithoutTelemetry)
+            {
+                Debug.LogWarning(string.Format("[RobotAgent] {0}", message), this);
             }
         }
 
