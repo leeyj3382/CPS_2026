@@ -98,6 +98,71 @@ namespace CPS.ICPBL.Student.Tests
         }
 
         [Test]
+        public void RunSchedulingCycle_DispatchesFullQueueWithEarlierNextProductionFirst()
+        {
+            var robot = new FakeRobotAgent(StudentConstants.RobotAId);
+            environment.SetQueueLength(1, StudentConstants.ConveyorQueueCapacity);
+            environment.SetQueueLength(2, StudentConstants.ConveyorQueueCapacity);
+            environment.SetNextProductionAt(1, 120f);
+            environment.SetNextProductionAt(2, 90f);
+            fleetManager.ConfigureRobotAgents(robot, null);
+
+            fleetManager.RunSchedulingCycle();
+
+            Assert.That(robot.DispatchCount, Is.EqualTo(1));
+            Assert.That(robot.LastRequest.conveyorId, Is.EqualTo(2));
+        }
+
+        [Test]
+        public void RunSchedulingCycle_DispatchesFullQueueWithShorterPeriodWhenNextProductionTies()
+        {
+            var robot = new FakeRobotAgent(StudentConstants.RobotAId);
+            environment.SetQueueLength(1, StudentConstants.ConveyorQueueCapacity);
+            environment.SetQueueLength(2, StudentConstants.ConveyorQueueCapacity);
+            environment.SetNextProductionAt(1, float.PositiveInfinity);
+            environment.SetNextProductionAt(2, float.PositiveInfinity);
+            fleetManager.ConfigureRobotAgents(robot, null);
+
+            fleetManager.RunSchedulingCycle();
+
+            Assert.That(robot.DispatchCount, Is.EqualTo(1));
+            Assert.That(robot.LastRequest.conveyorId, Is.EqualTo(1));
+        }
+
+        [Test]
+        public void RunSchedulingCycle_DispatchesPostProductionRemainingQueueImmediately()
+        {
+            var robot = new FakeRobotAgent(StudentConstants.RobotAId);
+            environment.CurrentTime = 330f;
+            environment.ProductionEndTimeValue = 180f;
+            environment.SetQueueLength(8, 1);
+            fleetManager.ConfigureRobotAgents(robot, null);
+
+            fleetManager.RunSchedulingCycle();
+
+            Assert.That(robot.DispatchCount, Is.EqualTo(1));
+            Assert.That(robot.LastRequest.conveyorId, Is.EqualTo(8));
+            Assert.That(fleetManager.Tasks[0].priorityScore, Is.EqualTo(0f));
+        }
+
+        [Test]
+        public void RunSchedulingCycle_PrioritizesPostProductionRemainingQueueOverFutureProduction()
+        {
+            var robot = new FakeRobotAgent(StudentConstants.RobotAId);
+            environment.CurrentTime = 330f;
+            environment.ProductionEndTimeValue = 180f;
+            environment.SetQueueLength(1, 1);
+            environment.SetQueueLength(8, 1);
+            environment.SetNextProductionAt(1, 1000f);
+            fleetManager.ConfigureRobotAgents(robot, null);
+
+            fleetManager.RunSchedulingCycle();
+
+            Assert.That(robot.DispatchCount, Is.EqualTo(1));
+            Assert.That(robot.LastRequest.conveyorId, Is.EqualTo(8));
+        }
+
+        [Test]
         public void RunSchedulingCycle_DoesNotAssignOneConveyorToBothRobots()
         {
             var robotA = new FakeRobotAgent(StudentConstants.RobotAId);
@@ -187,9 +252,12 @@ namespace CPS.ICPBL.Student.Tests
         {
             private readonly int[] queueLengths =
                 new int[StudentConstants.MaxConveyorId + 1];
+            private readonly float[] nextProductionAt =
+                new float[StudentConstants.MaxConveyorId + 1];
 
             public float CurrentTime { get; set; }
-            public float ProductionEndTime => 220f;
+            public float ProductionEndTimeValue { get; set; } = 220f;
+            public float ProductionEndTime => ProductionEndTimeValue;
 
             public int GetQueueLength(int conveyorId)
             {
@@ -203,12 +271,19 @@ namespace CPS.ICPBL.Student.Tests
 
             public float NextProductionAt(int conveyorId)
             {
-                return -1f;
+                return nextProductionAt[conveyorId] > 0f
+                    ? nextProductionAt[conveyorId]
+                    : -1f;
             }
 
             public void SetQueueLength(int conveyorId, int queueLength)
             {
                 queueLengths[conveyorId] = queueLength;
+            }
+
+            public void SetNextProductionAt(int conveyorId, float nextAt)
+            {
+                nextProductionAt[conveyorId] = nextAt;
             }
         }
 

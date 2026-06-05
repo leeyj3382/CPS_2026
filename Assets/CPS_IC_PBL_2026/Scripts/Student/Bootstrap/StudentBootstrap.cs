@@ -96,7 +96,8 @@ namespace CPS.ICPBL.Student
                 sceneReferences.ResourceLockManager,
                 sceneReferences.PathPlanner,
                 sceneReferences.TelemetryLogger,
-                sceneReferences.OperatingStations);
+                sceneReferences.OperatingStations,
+                sceneReferences.EnvironmentInfo);
         }
 
         private void ConfigureFleet()

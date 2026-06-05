@@ -53,6 +53,7 @@ namespace CPS.ICPBL.Student
         private IResourceLockManager lockManager;
         private IPathPlanner pathPlanner;
         private ITelemetryLogger telemetryLogger;
+        private IEnvironmentInfo environmentInfo;
         private Coroutine activeMission;
         private int currentStationId = StudentConstants.NoStationId;
 
@@ -65,7 +66,12 @@ namespace CPS.ICPBL.Student
 
         public bool CanAcceptTask
         {
-            get { return activeMission == null && State == RobotRuntimeState.Idle; }
+            get
+            {
+                return activeMission == null
+                    && State == RobotRuntimeState.Idle
+                    && (suctionGripper == null || !suctionGripper.IsHolding);
+            }
         }
 
         public int CurrentStationId
@@ -157,7 +163,8 @@ namespace CPS.ICPBL.Student
             IResourceLockManager lockManager,
             IPathPlanner pathPlanner,
             ITelemetryLogger telemetryLogger = null,
-            OperatingStations stationData = null)
+            OperatingStations stationData = null,
+            IEnvironmentInfo environmentInfo = null)
         {
             robotController = controller;
             robotControllerComponent = controller as MonoBehaviour;
@@ -171,6 +178,7 @@ namespace CPS.ICPBL.Student
             this.pathPlanner = pathPlanner;
             this.telemetryLogger = telemetryLogger;
             operatingStations = stationData;
+            this.environmentInfo = environmentInfo;
 
             poseProviderComponent = poseProvider as MonoBehaviour;
             palletizerComponent = palletizer as MonoBehaviour;
@@ -183,6 +191,11 @@ namespace CPS.ICPBL.Student
             {
                 robotId = robotController.RobotId;
             }
+        }
+
+        public void ConfigureEnvironmentInfo(IEnvironmentInfo info)
+        {
+            environmentInfo = info;
         }
 
         public void ConfigureServices(
@@ -354,6 +367,14 @@ namespace CPS.ICPBL.Student
                 PathTrafficManager = pathPlanner as IPathTrafficManager,
                 OperatingStations = operatingStations,
                 TelemetryLogger = telemetryLogger,
+                GetQueueLength = conveyorId => environmentInfo != null
+                    ? environmentInfo.GetQueueLength(conveyorId)
+                    : StudentConstants.NoTaskId,
+                GetQueueFrontObject = conveyorId =>
+                    environmentInfo is EnvironmentInfo concreteEnvironment
+                        ? concreteEnvironment.GetQueueFrontObject(conveyorId)
+                        : null,
+                GetState = () => State,
                 GetCurrentStationId = () => currentStationId,
                 SetCurrentStationId = stationId => currentStationId = stationId,
                 SetState = SetState

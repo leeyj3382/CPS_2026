@@ -14,10 +14,14 @@ namespace CPS.ICPBL.Student
         private const float DistanceCostScale = 1f;
 
         private readonly OperatingStations operatingStations;
+        private readonly bool enableDebugLogging;
 
-        public TaskAllocator(OperatingStations operatingStations = null)
+        public TaskAllocator(
+            OperatingStations operatingStations = null,
+            bool enableDebugLogging = false)
         {
             this.operatingStations = operatingStations;
+            this.enableDebugLogging = enableDebugLogging;
         }
 
         public WorkTask SelectBestTask(
@@ -82,6 +86,10 @@ namespace CPS.ICPBL.Student
                     effectiveDeadline,
                     distanceCost,
                     useOfficialNextProductionTimes);
+                LogCandidate(
+                    snapshot,
+                    estimatedDeadline,
+                    effectiveDeadline);
 
                 if (bestTask == null || IsBetterCandidate(
                     task,
@@ -109,6 +117,7 @@ namespace CPS.ICPBL.Student
                 }
             }
 
+            LogSelection(bestTask);
             return bestTask;
         }
 
@@ -206,6 +215,11 @@ namespace CPS.ICPBL.Student
                 return 0f;
             }
 
+            if (snapshot.queueLength > 0 && float.IsInfinity(snapshot.nextProductionAt))
+            {
+                return 0f;
+            }
+
             int slotsUntilFull = StudentConstants.ConveyorQueueCapacity - snapshot.queueLength;
             if (useOfficialNextProductionTimes)
             {
@@ -282,6 +296,23 @@ namespace CPS.ICPBL.Student
                 return candidateIsFull;
             }
 
+            if (candidateIsFull && bestIsFull)
+            {
+                if (!ApproximatelyDeadline(
+                    candidateSnapshot.nextProductionAt,
+                    bestSnapshot.nextProductionAt))
+                {
+                    return candidateSnapshot.nextProductionAt < bestSnapshot.nextProductionAt;
+                }
+
+                if (!Mathf.Approximately(
+                    candidateSnapshot.productionPeriod,
+                    bestSnapshot.productionPeriod))
+                {
+                    return candidateSnapshot.productionPeriod < bestSnapshot.productionPeriod;
+                }
+            }
+
             if (!ApproximatelyDeadline(candidateEffectiveDeadline, bestEffectiveDeadline))
             {
                 return candidateEffectiveDeadline < bestEffectiveDeadline;
@@ -350,9 +381,7 @@ namespace CPS.ICPBL.Student
             float distanceCost,
             bool useOfficialNextProductionTimes)
         {
-            string deadlineSource = IsFull(snapshot)
-                ? "queue-full"
-                : useOfficialNextProductionTimes ? "next-production" : "period-fallback";
+            string deadlineSource = GetDeadlineSource(snapshot, useOfficialNextProductionTimes);
             return string.Format(
                 "policy=earliest-saturation-first, robot={0}, priorityQueue={1}, preferredRange={2}, queue={3}, saturationDeadline={4:0.##}, effectiveDeadline={5:0.##}, source={6}, period={7:0.##}, distanceTieCost={8:0.##}",
                 robotId,
@@ -364,6 +393,59 @@ namespace CPS.ICPBL.Student
                 deadlineSource,
                 snapshot.productionPeriod,
                 distanceCost);
+        }
+
+        private static string GetDeadlineSource(
+            ConveyorSnapshot snapshot,
+            bool useOfficialNextProductionTimes)
+        {
+            if (IsFull(snapshot))
+            {
+                return "queue-full";
+            }
+
+            if (snapshot.queueLength > 0 && float.IsInfinity(snapshot.nextProductionAt))
+            {
+                return "post-production-drain";
+            }
+
+            return useOfficialNextProductionTimes ? "next-production" : "period-fallback";
+        }
+
+        private void LogCandidate(
+            ConveyorSnapshot snapshot,
+            float estimatedDeadline,
+            float effectiveDeadline)
+        {
+            if (!enableDebugLogging)
+            {
+                return;
+            }
+
+            Debug.LogFormat(
+                "[Debug][TaskCandidate] conveyor={0} queue={1} reserved={2} next={3} estimatedDeadline={4} effectiveDeadline={5}",
+                snapshot.conveyorId,
+                snapshot.queueLength,
+                snapshot.isReserved,
+                snapshot.nextProductionAt,
+                estimatedDeadline,
+                effectiveDeadline);
+        }
+
+        private void LogSelection(WorkTask bestTask)
+        {
+            if (!enableDebugLogging)
+            {
+                return;
+            }
+
+            Debug.Log(bestTask == null
+                ? "[Debug][TaskAllocator] No task selected"
+                : string.Format(
+                    "[Debug][TaskAllocator] Selected conveyor={0}, priority={1}, reason={2}",
+                    bestTask.conveyorId,
+                    bestTask.priorityScore,
+                    bestTask.debugReason));
         }
     }
 }

@@ -42,6 +42,14 @@ namespace CPS.ICPBL.Environment
             return conv != null ? conv.QueueCount : 0;
         }
 
+        public GameObject GetQueueFrontObject(int conveyorId)
+        {
+            if (spawnSystem == null || spawnSystem.conveyors == null) return null;
+            if (conveyorId < 1 || conveyorId > spawnSystem.conveyors.Length) return null;
+            var conv = spawnSystem.conveyors[conveyorId - 1];
+            return conv != null ? conv.GetQueueFrontObject() : null;
+        }
+
         public int GetBoxOccupancy(BoxType box)
         {
             BoxTrigger target = (box == BoxType.Normal) ? normalBox : abnormalBox;

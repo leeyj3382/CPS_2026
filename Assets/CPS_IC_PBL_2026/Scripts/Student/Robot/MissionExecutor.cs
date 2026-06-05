@@ -24,6 +24,9 @@ namespace CPS.ICPBL.Student
             public IPathTrafficManager PathTrafficManager;
             public OperatingStations OperatingStations;
             public ITelemetryLogger TelemetryLogger;
+            public Func<int, int> GetQueueLength;
+            public Func<int, GameObject> GetQueueFrontObject;
+            public Func<RobotRuntimeState> GetState;
             public Func<int> GetCurrentStationId;
             public Action<int> SetCurrentStationId;
             public Action<RobotRuntimeState> SetState;
@@ -70,6 +73,7 @@ namespace CPS.ICPBL.Student
             public BoxSlotPose ReservedSlot;
             public BoxType DestinationBoxType;
             public ColorClassificationResult Classification;
+            public GameObject ExpectedFrontObject;
 
             public MissionContext(MissionRequest request)
             {
@@ -149,6 +153,11 @@ namespace CPS.ICPBL.Student
 
             if (!context.Failed)
             {
+                ValidateExpectedPayloadAttached(context, "before classification");
+            }
+
+            if (!context.Failed)
+            {
                 yield return RunClassification(context);
             }
 
@@ -183,6 +192,11 @@ namespace CPS.ICPBL.Student
                         boxKey,
                         MissionFailureReason.BoxLockFailed,
                         "box lock");
+                }
+
+                if (!context.Failed)
+                {
+                    ValidateExpectedPayloadAttached(context, "before place sequence");
                 }
 
                 if (!context.Failed)
@@ -982,6 +996,14 @@ namespace CPS.ICPBL.Student
                 yield break;
             }
 
+            context.ExpectedFrontObject = GetQueueFrontObject(context.Request.conveyorId);
+            LogPickIdentity(context, "BeforeGrip");
+            if (context.ExpectedFrontObject == null)
+            {
+                Fail(context, MissionFailureReason.GripFailed, "Queue front object is null before grip.");
+                yield break;
+            }
+
             ResourceKey armKey = new ResourceKey(
                 LockResourceType.RobotArmZone,
                 context.Request.conveyorId);
@@ -1009,6 +1031,8 @@ namespace CPS.ICPBL.Student
             }
 
             yield return GripWithRetry(context);
+            LogPickIdentity(context, "AfterGrip");
+            ValidateExpectedPayloadAttached(context, "after grip");
             if (context.Failed)
             {
                 yield break;
@@ -1016,6 +1040,13 @@ namespace CPS.ICPBL.Student
 
             dependencies.SetState?.Invoke(RobotRuntimeState.Retracting);
             yield return MoveArmTo(context, pose.retractPos, pose.armMoveDuration, "pick retract");
+            LogPickIdentity(context, "AfterLift");
+            ValidateExpectedPayloadAttached(context, "after pick retract");
+            if (context.Failed)
+            {
+                yield break;
+            }
+
             ReleaseKey(context, armKey);
         }
 
@@ -1026,8 +1057,16 @@ namespace CPS.ICPBL.Student
                 return;
             }
 
+            LogPickIdentity(context, "BeforeConveyorPicked");
+            ValidateExpectedPayloadAttached(context, "before conveyor picked report");
+            if (context.Failed)
+            {
+                return;
+            }
+
             context.ConveyorPickReported = true;
             NotifyProgress(context, MissionProgressType.ConveyorPicked);
+            LogPickIdentity(context, "AfterConveyorPicked");
         }
 
         private void NotifyProgress(MissionContext context, MissionProgressType type)
@@ -1185,15 +1224,25 @@ namespace CPS.ICPBL.Student
             {
                 yield break;
             }
+            ValidateExpectedPayloadAttached(context, "after place approach");
+            if (context.Failed)
+            {
+                yield break;
+            }
 
             yield return MoveArmTo(context, context.ReservedSlot.placePos, StudentConstants.DefaultArmMoveDurationSec, "place action");
             if (context.Failed)
             {
                 yield break;
             }
+            ValidateExpectedPayloadAttached(context, "after place action");
+            if (context.Failed)
+            {
+                yield break;
+            }
 
             dependencies.SetState?.Invoke(RobotRuntimeState.Releasing);
-            dependencies.Gripper.Release();
+            ReleaseGrip(context, "place action");
             yield return null;
             if (dependencies.Gripper.IsHolding)
             {
@@ -1212,6 +1261,101 @@ namespace CPS.ICPBL.Student
             }
 
             ReleaseKey(context, armKey);
+        }
+
+        private void ValidateExpectedPayloadAttached(MissionContext context, string phase)
+        {
+            GameObject expectedObject = ResolveProductRoot(context.ExpectedFrontObject);
+            GameObject attachedObject = ResolveProductRoot(GetAttachedObject());
+            if (dependencies.Gripper != null
+                && dependencies.Gripper.IsHolding
+                && expectedObject != null
+                && attachedObject == expectedObject)
+            {
+                return;
+            }
+
+            context.PayloadSecured = false;
+            Fail(context, MissionFailureReason.GripFailed, string.Format(
+                "Attached object did not match queue front {0}. expected={1} attached={2}.",
+                phase,
+                FormatObject(expectedObject),
+                FormatObject(attachedObject)));
+        }
+
+        private void LogPickIdentity(MissionContext context, string phase)
+        {
+            GameObject expectedObject = ResolveProductRoot(context.ExpectedFrontObject);
+            GameObject attachedObject = ResolveProductRoot(GetAttachedObject());
+            bool matchesExpected = expectedObject != null
+                && attachedObject == expectedObject;
+
+            LogMessage("Pick", string.Format(
+                "[Debug][PickIdentity] task={0} robot={1} conveyor={2} phase={3} expected={4} attached={5} match={6} queue={7}",
+                context.Request.taskId,
+                context.Request.robotId,
+                context.Request.conveyorId,
+                phase,
+                FormatObject(expectedObject),
+                FormatObject(attachedObject),
+                matchesExpected,
+                GetQueueLength(context.Request.conveyorId)));
+        }
+
+        private int GetQueueLength(int conveyorId)
+        {
+            return dependencies.GetQueueLength != null
+                ? dependencies.GetQueueLength(conveyorId)
+                : StudentConstants.NoTaskId;
+        }
+
+        private GameObject GetQueueFrontObject(int conveyorId)
+        {
+            return dependencies.GetQueueFrontObject != null
+                ? dependencies.GetQueueFrontObject(conveyorId)
+                : null;
+        }
+
+        private GameObject GetAttachedObject()
+        {
+            return dependencies.Gripper != null
+                ? dependencies.Gripper.HeldGameObject
+                : null;
+        }
+
+        private static string FormatObject(GameObject obj)
+        {
+            return obj != null
+                ? string.Format("{0}#{1}", obj.name, obj.GetInstanceID())
+                : "null";
+        }
+
+        private static GameObject ResolveProductRoot(GameObject obj)
+        {
+            if (obj == null)
+            {
+                return null;
+            }
+
+            RealProduct product = obj.GetComponentInParent<RealProduct>();
+            return product != null ? product.gameObject : obj;
+        }
+
+        private void ReleaseGrip(MissionContext context, string reason)
+        {
+            LogMessage("Grip", string.Format(
+                "[Debug][GripRelease] task={0} robot={1} state={2} reason={3} isGripping={4} attachedObject={5} heldObject={6}",
+                context.Request.taskId,
+                context.Request.robotId,
+                dependencies.GetState != null
+                    ? dependencies.GetState().ToString()
+                    : "unknown",
+                reason,
+                dependencies.Gripper != null && dependencies.Gripper.IsHolding,
+                dependencies.Gripper != null && dependencies.Gripper.HasAttachedObject,
+                dependencies.Gripper != null ? dependencies.Gripper.HeldObjectName : "null"));
+
+            dependencies.Gripper?.Release();
         }
 
         private IEnumerator MoveArmTo(
@@ -1320,6 +1464,17 @@ namespace CPS.ICPBL.Student
 
         private void CleanupFailure(MissionContext context)
         {
+            LogMessage("Mission", string.Format(
+                "[Debug][MissionCleanup] task={0} robot={1} conveyor={2} payloadSecured={3} conveyorPickReported={4} isGripping={5} attachedObject={6} message={7}",
+                context.Request.taskId,
+                context.Request.robotId,
+                context.Request.conveyorId,
+                context.PayloadSecured,
+                context.ConveyorPickReported,
+                dependencies.Gripper != null && dependencies.Gripper.IsHolding,
+                dependencies.Gripper != null && dependencies.Gripper.HasAttachedObject,
+                context.Result.message));
+
             if (context.SlotReserved && !context.SlotCommitted)
             {
                 dependencies.Palletizer?.ReleaseSlot(context.Request.taskId);

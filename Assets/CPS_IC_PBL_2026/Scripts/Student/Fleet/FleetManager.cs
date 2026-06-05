@@ -23,6 +23,7 @@ namespace CPS.ICPBL.Student
         [SerializeField] private bool runAutomatically = true;
         [SerializeField] private bool enableDistanceTieBreaker;
         [SerializeField] private bool logEventsWithoutTelemetry = true;
+        [SerializeField] private bool enableSchedulingDebugLogs = true;
         [SerializeField, Min(0f)] private float postPickConveyorCooldownSec = 0f;
 
         private readonly HashSet<int> reservedConveyorIds = new HashSet<int>();
@@ -107,7 +108,8 @@ namespace CPS.ICPBL.Student
             telemetryLogger = logger;
             environmentScanner = new EnvironmentScanner(environmentInfo);
             taskAllocator = new TaskAllocator(
-                enableDistanceTieBreaker ? operatingStations : null);
+                enableDistanceTieBreaker ? operatingStations : null,
+                enableSchedulingDebugLogs);
             nextPollingAt = 0f;
         }
 
@@ -174,6 +176,7 @@ namespace CPS.ICPBL.Student
             LatestSnapshots = environmentScanner.Scan(
                 reservedConveyorIds,
                 lastAssignedAtByConveyor);
+            LogSnapshots(LatestSnapshots);
 
             RefreshPendingTasks(LatestSnapshots);
             DispatchAvailableRobots(LatestSnapshots);
@@ -282,6 +285,7 @@ namespace CPS.ICPBL.Student
                 WorkTask[] pendingTasks = BuildPendingTaskArray();
                 if (pendingTasks.Length == 0)
                 {
+                    LogSchedulingDecision(robotAgent, null);
                     return;
                 }
 
@@ -290,6 +294,7 @@ namespace CPS.ICPBL.Student
                     snapshots,
                     robotSnapshot,
                     pendingTasks);
+                LogSchedulingDecision(robotAgent, selectedTask);
 
                 if (selectedTask == null)
                 {
@@ -304,6 +309,7 @@ namespace CPS.ICPBL.Student
         {
             return robotAgent != null
                 && robotAgent.CanAcceptTask
+                && robotAgent.State == RobotRuntimeState.Idle
                 && FindInFlightTask(robotAgent.RobotId) == null;
         }
 
@@ -589,6 +595,87 @@ namespace CPS.ICPBL.Student
                     return;
                 }
             }
+        }
+
+        private void LogSnapshots(ConveyorSnapshot[] snapshots)
+        {
+            if (!enableSchedulingDebugLogs)
+            {
+                return;
+            }
+
+            for (int i = 0; i < snapshots.Length; i++)
+            {
+                ConveyorSnapshot snapshot = snapshots[i];
+                if (snapshot == null)
+                {
+                    continue;
+                }
+
+                if (snapshot.queueLength <= 0
+                    && !snapshot.isReserved
+                    && !float.IsInfinity(snapshot.nextProductionAt))
+                {
+                    continue;
+                }
+
+                Debug.LogFormat(
+                    this,
+                    "[Debug][Snapshot] t={0:0.00} conveyor={1} queue={2} reserved={3} next={4} period={5}",
+                    environmentInfo.CurrentTime,
+                    snapshot.conveyorId,
+                    snapshot.queueLength,
+                    snapshot.isReserved,
+                    snapshot.nextProductionAt,
+                    snapshot.productionPeriod);
+            }
+        }
+
+        private void LogSchedulingDecision(IRobotAgent robotAgent, WorkTask selectedTask)
+        {
+            if (!enableSchedulingDebugLogs || robotAgent == null)
+            {
+                return;
+            }
+
+            Debug.LogFormat(
+                this,
+                "[Debug][Scheduling] robot={0} idle={1}, canAccept={2}, selectedTask={3}, activeTasks={4}, reserved={5}",
+                robotAgent.RobotId,
+                robotAgent.State == RobotRuntimeState.Idle,
+                robotAgent.CanAcceptTask,
+                selectedTask != null ? selectedTask.conveyorId.ToString() : "null",
+                CountActiveTasks(),
+                BuildReservedConveyorList());
+        }
+
+        private int CountActiveTasks()
+        {
+            int count = 0;
+            for (int i = 0; i < tasks.Count; i++)
+            {
+                TaskStatus status = tasks[i].status;
+                if (status == TaskStatus.Pending
+                    || status == TaskStatus.Reserved
+                    || status == TaskStatus.Running)
+                {
+                    count++;
+                }
+            }
+
+            return count;
+        }
+
+        private string BuildReservedConveyorList()
+        {
+            if (reservedConveyorIds.Count == 0)
+            {
+                return string.Empty;
+            }
+
+            var ids = new List<int>(reservedConveyorIds);
+            ids.Sort();
+            return string.Join(",", ids);
         }
 
         private void LogTaskCreated(WorkTask task)

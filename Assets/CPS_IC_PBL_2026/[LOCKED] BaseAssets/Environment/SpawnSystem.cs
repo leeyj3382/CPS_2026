@@ -55,6 +55,11 @@ public class SpawnSystem : MonoBehaviour
 
         for (int i = 0; i < conveyors.Length; i++)
         {
+            if (conveyors[i] != null)
+            {
+                conveyors[i].SetDebugConveyorId(i + 1);
+            }
+
             int productCount = timeLimit / productionPeriod[i];
             bool[] tempArray = new bool[productCount];
             for (int j = 0; j < productCount; j++)

@@ -23,6 +23,31 @@ namespace CPS.ICPBL.Student
             get { return gripper != null && gripper.IsHolding; }
         }
 
+        public bool HasAttachedObject
+        {
+            get { return gripper != null && gripper.HeldObject != null; }
+        }
+
+        public GameObject HeldGameObject
+        {
+            get
+            {
+                return gripper != null && gripper.HeldObject != null
+                    ? gripper.HeldObject.gameObject
+                    : null;
+            }
+        }
+
+        public string HeldObjectName
+        {
+            get
+            {
+                return gripper != null && gripper.HeldObject != null
+                    ? gripper.HeldObject.name
+                    : "null";
+            }
+        }
+
         public bool IsGraspReady
         {
             get { return gripper != null && gripper.IsGraspReady; }
