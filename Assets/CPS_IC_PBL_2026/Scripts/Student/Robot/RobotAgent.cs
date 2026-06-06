@@ -8,7 +8,7 @@ using UnityEngine;
 namespace CPS.ICPBL.Student
 {
     [DisallowMultipleComponent]
-    public sealed class RobotAgent : MonoBehaviour, IRobotAgent
+    public sealed class RobotAgent : MonoBehaviour, IRobotAgent, IRobotStationTracker
     {
         [Header("Robot References")]
         [SerializeField] private int robotId = StudentConstants.RobotAId;

@@ -20,7 +20,7 @@ namespace CPS.ICPBL.Student
     {
         public RobotSnapshot baseSnapshot;
         public RobotRuntimeState state;
-        public int currentStationId;
+        public int currentStationId = StudentConstants.NoStationId;
         public int currentTaskId = StudentConstants.NoTaskId;
     }
 

@@ -5,13 +5,17 @@ using UnityEngine;
 namespace CPS.ICPBL.Student
 {
     /// <summary>
-    /// Selects one Fleet-owned pending task by its estimated queue-saturation deadline.
+    /// Selects one Fleet-owned pending task by estimated overflow risk, queue pressure,
+    /// robot travel cost, and a weak robot-area preference.
     /// This selector is non-preemptive: reserved or running tasks are never reconsidered.
-    /// Task creation and reservation updates remain owned by FleetManager.
     /// </summary>
     public sealed class TaskAllocator : ITaskAllocator
     {
-        private const float DistanceCostScale = 1f;
+        private const float QueuePressureLeadPerItemSec = 1.25f;
+        private const float FullQueueExtraLeadSec = 1.5f;
+        private const float TravelCostPerMeterSec = 0.35f;
+        private const float PreferredAreaPenaltySec = 4f;
+        private const float WorkStealDeadlineAdvantageSec = 8f;
 
         private readonly OperatingStations operatingStations;
 
@@ -24,6 +28,15 @@ namespace CPS.ICPBL.Student
             ConveyorSnapshot[] conveyors,
             StudentRobotSnapshot robot,
             WorkTask[] pendingTasks)
+        {
+            return SelectBestTask(conveyors, robot, pendingTasks, true);
+        }
+
+        public WorkTask SelectBestTask(
+            ConveyorSnapshot[] conveyors,
+            StudentRobotSnapshot robot,
+            WorkTask[] pendingTasks,
+            bool allowWorkStealing)
         {
             if (conveyors == null)
             {
@@ -40,14 +53,17 @@ namespace CPS.ICPBL.Student
                 throw new ArgumentNullException(nameof(pendingTasks));
             }
 
-            WorkTask bestTask = null;
-            ConveyorSnapshot bestSnapshot = null;
-            float bestDeadline = float.PositiveInfinity;
-            float bestEffectiveDeadline = float.PositiveInfinity;
-            float bestDistanceCost = float.PositiveInfinity;
-            bool bestInPreferredRange = false;
-            bool bestHasPriorityQueue = false;
-            bool useOfficialNextProductionTimes = CanUseOfficialNextProductionTimes(conveyors, pendingTasks);
+            bool useOfficialNextProductionTimes = CanUseOfficialNextProductionTimes(
+                conveyors,
+                pendingTasks);
+            PreferredAreaContext preferredArea = BuildPreferredAreaContext(
+                conveyors,
+                robot.baseSnapshot.RobotId,
+                pendingTasks,
+                useOfficialNextProductionTimes);
+
+            TaskCandidate bestCandidate = default;
+            bool hasBestCandidate = false;
 
             for (int i = 0; i < pendingTasks.Length; i++)
             {
@@ -63,53 +79,35 @@ namespace CPS.ICPBL.Student
                     continue;
                 }
 
-                float estimatedDeadline = CalculateEstimatedSaturationDeadline(
-                    snapshot,
-                    useOfficialNextProductionTimes);
-                float effectiveDeadline = CalculateEffectiveDeadline(snapshot, estimatedDeadline);
-                float distanceCost = CalculateDistanceCost(snapshot.conveyorId, robot);
-                bool inPreferredRange = IsPreferredConveyorForRobot(
-                    robot.baseSnapshot.RobotId,
-                    snapshot.conveyorId);
-                bool hasPriorityQueue = HasPriorityQueue(snapshot);
-                task.priorityScore = -effectiveDeadline;
-                task.debugReason = BuildDebugReason(
-                    snapshot,
-                    robot.baseSnapshot.RobotId,
-                    inPreferredRange,
-                    hasPriorityQueue,
-                    estimatedDeadline,
-                    effectiveDeadline,
-                    distanceCost,
-                    useOfficialNextProductionTimes);
+                if (!allowWorkStealing
+                    && !IsPreferredConveyorForRobot(
+                        robot.baseSnapshot.RobotId,
+                        snapshot.conveyorId))
+                {
+                    continue;
+                }
 
-                if (bestTask == null || IsBetterCandidate(
+                TaskCandidate candidate = BuildCandidate(
                     task,
                     snapshot,
-                    estimatedDeadline,
-                    effectiveDeadline,
-                    distanceCost,
-                    inPreferredRange,
-                    hasPriorityQueue,
-                    bestTask,
-                    bestSnapshot,
-                    bestDeadline,
-                    bestEffectiveDeadline,
-                    bestDistanceCost,
-                    bestInPreferredRange,
-                    bestHasPriorityQueue))
+                    robot,
+                    preferredArea,
+                    useOfficialNextProductionTimes);
+
+                task.priorityScore = -candidate.dispatchCost;
+                task.debugReason = BuildDebugReason(
+                    candidate,
+                    robot.baseSnapshot.RobotId,
+                    useOfficialNextProductionTimes);
+
+                if (!hasBestCandidate || IsBetterCandidate(candidate, bestCandidate))
                 {
-                    bestTask = task;
-                    bestSnapshot = snapshot;
-                    bestDeadline = estimatedDeadline;
-                    bestEffectiveDeadline = effectiveDeadline;
-                    bestDistanceCost = distanceCost;
-                    bestInPreferredRange = inPreferredRange;
-                    bestHasPriorityQueue = hasPriorityQueue;
+                    bestCandidate = candidate;
+                    hasBestCandidate = true;
                 }
             }
 
-            return bestTask;
+            return hasBestCandidate ? bestCandidate.task : null;
         }
 
         private static bool IsPendingAndUnassigned(WorkTask task)
@@ -146,8 +144,7 @@ namespace CPS.ICPBL.Student
             ConveyorSnapshot[] conveyors,
             WorkTask[] pendingTasks)
         {
-            // Absolute official deadlines cannot be compared with relative fallback horizons.
-            bool hasNonFullCandidate = false;
+            bool hasCandidate = false;
             for (int i = 0; i < pendingTasks.Length; i++)
             {
                 WorkTask task = pendingTasks[i];
@@ -157,19 +154,19 @@ namespace CPS.ICPBL.Student
                 }
 
                 ConveyorSnapshot snapshot = FindSnapshot(conveyors, task.conveyorId);
-                if (!IsEligible(snapshot) || IsFull(snapshot))
+                if (!IsEligible(snapshot))
                 {
                     continue;
                 }
 
-                hasNonFullCandidate = true;
+                hasCandidate = true;
                 if (snapshot.nextProductionAt < 0f)
                 {
                     return false;
                 }
             }
 
-            return hasNonFullCandidate;
+            return hasCandidate;
         }
 
         private static bool IsFull(ConveyorSnapshot snapshot)
@@ -186,151 +183,243 @@ namespace CPS.ICPBL.Student
         {
             if (robotId == StudentConstants.RobotAId)
             {
-                return conveyorId >= 1 && conveyorId <= 5;
+                return conveyorId >= 1 && conveyorId <= 3;
             }
 
             if (robotId == StudentConstants.RobotBId)
             {
-                return conveyorId >= 6 && conveyorId <= 10;
+                return conveyorId >= 4 && conveyorId <= 10;
             }
 
             return false;
         }
 
-        private static float CalculateEstimatedSaturationDeadline(
+        private static PreferredAreaContext BuildPreferredAreaContext(
+            ConveyorSnapshot[] conveyors,
+            int robotId,
+            WorkTask[] pendingTasks,
+            bool useOfficialNextProductionTimes)
+        {
+            PreferredAreaContext context = default;
+            context.bestPreferredOverflowDeadline = float.PositiveInfinity;
+
+            for (int i = 0; i < pendingTasks.Length; i++)
+            {
+                WorkTask task = pendingTasks[i];
+                if (!IsPendingAndUnassigned(task))
+                {
+                    continue;
+                }
+
+                ConveyorSnapshot snapshot = FindSnapshot(conveyors, task.conveyorId);
+                if (!IsEligible(snapshot)
+                    || !IsPreferredConveyorForRobot(robotId, snapshot.conveyorId))
+                {
+                    continue;
+                }
+
+                float overflowDeadline = CalculateEstimatedOverflowDeadline(
+                    snapshot,
+                    useOfficialNextProductionTimes);
+                context.hasPreferredCandidate = true;
+                context.bestPreferredOverflowDeadline = Mathf.Min(
+                    context.bestPreferredOverflowDeadline,
+                    overflowDeadline);
+            }
+
+            return context;
+        }
+
+        private TaskCandidate BuildCandidate(
+            WorkTask task,
+            ConveyorSnapshot snapshot,
+            StudentRobotSnapshot robot,
+            PreferredAreaContext preferredArea,
+            bool useOfficialNextProductionTimes)
+        {
+            bool inPreferredArea = IsPreferredConveyorForRobot(
+                robot.baseSnapshot.RobotId,
+                snapshot.conveyorId);
+            float overflowDeadline = CalculateEstimatedOverflowDeadline(
+                snapshot,
+                useOfficialNextProductionTimes);
+            float queuePressureLead = CalculateQueuePressureLead(snapshot);
+            float travelCost = CalculateTravelCost(snapshot.conveyorId, robot);
+            float areaPenalty = CalculateAreaPenalty(
+                inPreferredArea,
+                preferredArea,
+                overflowDeadline);
+            float pressureAdjustedDeadline = Mathf.Max(
+                0f,
+                overflowDeadline - queuePressureLead);
+            float dispatchCost = pressureAdjustedDeadline + travelCost + areaPenalty;
+
+            return new TaskCandidate
+            {
+                task = task,
+                snapshot = snapshot,
+                inPreferredArea = inPreferredArea,
+                hasPriorityQueue = HasPriorityQueue(snapshot),
+                overflowDeadline = overflowDeadline,
+                queuePressureLead = queuePressureLead,
+                pressureAdjustedDeadline = pressureAdjustedDeadline,
+                travelCost = travelCost,
+                areaPenalty = areaPenalty,
+                dispatchCost = dispatchCost
+            };
+        }
+
+        private static float CalculateEstimatedOverflowDeadline(
             ConveyorSnapshot snapshot,
             bool useOfficialNextProductionTimes)
         {
+            int safeQueueLength = Mathf.Clamp(
+                snapshot.queueLength,
+                0,
+                StudentConstants.ConveyorQueueCapacity);
+            int productionsUntilOverflow = Mathf.Max(
+                1,
+                StudentConstants.ConveyorQueueCapacity - safeQueueLength + 1);
+
+            if (useOfficialNextProductionTimes && snapshot.nextProductionAt >= 0f)
+            {
+                return snapshot.nextProductionAt
+                    + ((productionsUntilOverflow - 1) * snapshot.productionPeriod);
+            }
+
+            return productionsUntilOverflow * snapshot.productionPeriod;
+        }
+
+        private static float CalculateQueuePressureLead(ConveyorSnapshot snapshot)
+        {
+            int safeQueueLength = Mathf.Clamp(
+                snapshot.queueLength,
+                0,
+                StudentConstants.ConveyorQueueCapacity);
+            float lead = safeQueueLength * QueuePressureLeadPerItemSec;
             if (IsFull(snapshot))
+            {
+                lead += FullQueueExtraLeadSec;
+            }
+
+            return lead;
+        }
+
+        private static float CalculateAreaPenalty(
+            bool inPreferredArea,
+            PreferredAreaContext preferredArea,
+            float overflowDeadline)
+        {
+            if (inPreferredArea
+                || !preferredArea.hasPreferredCandidate
+                || overflowDeadline + WorkStealDeadlineAdvantageSec
+                    < preferredArea.bestPreferredOverflowDeadline)
             {
                 return 0f;
             }
 
-            int slotsUntilFull = StudentConstants.ConveyorQueueCapacity - snapshot.queueLength;
-            if (useOfficialNextProductionTimes)
-            {
-                return snapshot.nextProductionAt
-                    + ((slotsUntilFull - 1) * snapshot.productionPeriod);
-            }
-
-            return slotsUntilFull * snapshot.productionPeriod;
+            return PreferredAreaPenaltySec;
         }
 
-        private static float CalculateEffectiveDeadline(
-            ConveyorSnapshot snapshot,
-            float estimatedDeadline)
-        {
-            if (IsFull(snapshot) || float.IsInfinity(estimatedDeadline))
-            {
-                return estimatedDeadline;
-            }
-
-            float leadTime = 0f;
-            if (IsCentralDropRiskConveyor(snapshot.conveyorId))
-            {
-                leadTime += snapshot.productionPeriod;
-            }
-
-            if (snapshot.queueLength >= 2)
-            {
-                leadTime += snapshot.productionPeriod * 0.5f;
-            }
-
-            return Mathf.Max(0f, estimatedDeadline - leadTime);
-        }
-
-        private static bool IsCentralDropRiskConveyor(int conveyorId)
-        {
-            return conveyorId >= 3 && conveyorId <= 5;
-        }
-
-        private float CalculateDistanceCost(int conveyorId, StudentRobotSnapshot robot)
+        private float CalculateTravelCost(int conveyorId, StudentRobotSnapshot robot)
         {
             if (operatingStations == null)
             {
                 return 0f;
             }
 
-            if (!operatingStations.TryGetStation(conveyorId, out OperatingStations.Station station))
+            if (!operatingStations.TryGetStation(conveyorId, out OperatingStations.Station targetStation))
             {
                 return 0f;
             }
 
-            return Vector3.Distance(robot.baseSnapshot.Position, station.BasePosition) * DistanceCostScale;
+            if (!TryGetRobotPosition(robot, out Vector3 robotPosition))
+            {
+                return 0f;
+            }
+
+            return Vector3.Distance(robotPosition, targetStation.BasePosition)
+                * TravelCostPerMeterSec;
         }
 
-        private static bool IsBetterCandidate(
-            WorkTask candidateTask,
-            ConveyorSnapshot candidateSnapshot,
-            float candidateDeadline,
-            float candidateEffectiveDeadline,
-            float candidateDistanceCost,
-            bool candidateInPreferredRange,
-            bool candidateHasPriorityQueue,
-            WorkTask bestTask,
-            ConveyorSnapshot bestSnapshot,
-            float bestDeadline,
-            float bestEffectiveDeadline,
-            float bestDistanceCost,
-            bool bestInPreferredRange,
-            bool bestHasPriorityQueue)
+        private bool TryGetRobotPosition(StudentRobotSnapshot robot, out Vector3 position)
         {
-            bool candidateIsFull = IsFull(candidateSnapshot);
-            bool bestIsFull = IsFull(bestSnapshot);
-            if (candidateIsFull != bestIsFull)
+            if (robot != null
+                && (StudentConstants.IsConveyorId(robot.currentStationId)
+                    || StudentConstants.IsBoxStationId(robot.currentStationId))
+                && operatingStations.TryGetStation(
+                    robot.currentStationId,
+                    out OperatingStations.Station currentStation))
             {
-                return candidateIsFull;
+                position = currentStation.BasePosition;
+                return true;
             }
 
-            if (!ApproximatelyDeadline(candidateEffectiveDeadline, bestEffectiveDeadline))
+            if (robot != null && robot.baseSnapshot.Position != Vector3.zero)
             {
-                return candidateEffectiveDeadline < bestEffectiveDeadline;
+                position = robot.baseSnapshot.Position;
+                return true;
             }
 
-            if (!ApproximatelyDeadline(candidateDeadline, bestDeadline))
-            {
-                return candidateDeadline < bestDeadline;
-            }
-
-            if (candidateHasPriorityQueue != bestHasPriorityQueue)
-            {
-                return candidateHasPriorityQueue;
-            }
-
-            if (candidateSnapshot.queueLength != bestSnapshot.queueLength)
-            {
-                return candidateSnapshot.queueLength > bestSnapshot.queueLength;
-            }
-
-            if (candidateInPreferredRange != bestInPreferredRange)
-            {
-                return candidateInPreferredRange;
-            }
-
-            if (!Mathf.Approximately(candidateSnapshot.productionPeriod, bestSnapshot.productionPeriod))
-            {
-                return candidateSnapshot.productionPeriod < bestSnapshot.productionPeriod;
-            }
-
-            if (!Mathf.Approximately(candidateDistanceCost, bestDistanceCost))
-            {
-                return candidateDistanceCost < bestDistanceCost;
-            }
-
-            if (!Mathf.Approximately(candidateSnapshot.lastAssignedAt, bestSnapshot.lastAssignedAt))
-            {
-                return candidateSnapshot.lastAssignedAt < bestSnapshot.lastAssignedAt;
-            }
-
-            if (!Mathf.Approximately(candidateTask.createdAt, bestTask.createdAt))
-            {
-                return candidateTask.createdAt < bestTask.createdAt;
-            }
-
-            return candidateTask.conveyorId < bestTask.conveyorId;
+            position = default;
+            return false;
         }
 
-        private static bool ApproximatelyDeadline(float left, float right)
+        private static bool IsBetterCandidate(TaskCandidate candidate, TaskCandidate best)
+        {
+            if (!ApproximatelyCost(candidate.dispatchCost, best.dispatchCost))
+            {
+                return candidate.dispatchCost < best.dispatchCost;
+            }
+
+            if (!ApproximatelyCost(candidate.overflowDeadline, best.overflowDeadline))
+            {
+                return candidate.overflowDeadline < best.overflowDeadline;
+            }
+
+            if (candidate.hasPriorityQueue != best.hasPriorityQueue)
+            {
+                return candidate.hasPriorityQueue;
+            }
+
+            if (candidate.snapshot.queueLength != best.snapshot.queueLength)
+            {
+                return candidate.snapshot.queueLength > best.snapshot.queueLength;
+            }
+
+            if (candidate.inPreferredArea != best.inPreferredArea)
+            {
+                return candidate.inPreferredArea;
+            }
+
+            if (!Mathf.Approximately(
+                candidate.snapshot.productionPeriod,
+                best.snapshot.productionPeriod))
+            {
+                return candidate.snapshot.productionPeriod < best.snapshot.productionPeriod;
+            }
+
+            if (!Mathf.Approximately(candidate.travelCost, best.travelCost))
+            {
+                return candidate.travelCost < best.travelCost;
+            }
+
+            if (!Mathf.Approximately(
+                candidate.snapshot.lastAssignedAt,
+                best.snapshot.lastAssignedAt))
+            {
+                return candidate.snapshot.lastAssignedAt < best.snapshot.lastAssignedAt;
+            }
+
+            if (!Mathf.Approximately(candidate.task.createdAt, best.task.createdAt))
+            {
+                return candidate.task.createdAt < best.task.createdAt;
+            }
+
+            return candidate.task.conveyorId < best.task.conveyorId;
+        }
+
+        private static bool ApproximatelyCost(float left, float right)
         {
             if (float.IsInfinity(left) || float.IsInfinity(right))
             {
@@ -341,29 +430,47 @@ namespace CPS.ICPBL.Student
         }
 
         private static string BuildDebugReason(
-            ConveyorSnapshot snapshot,
+            TaskCandidate candidate,
             int robotId,
-            bool inPreferredRange,
-            bool hasPriorityQueue,
-            float estimatedDeadline,
-            float effectiveDeadline,
-            float distanceCost,
             bool useOfficialNextProductionTimes)
         {
-            string deadlineSource = IsFull(snapshot)
-                ? "queue-full"
-                : useOfficialNextProductionTimes ? "next-production" : "period-fallback";
+            string deadlineSource = useOfficialNextProductionTimes
+                ? "next-production"
+                : "period-fallback";
             return string.Format(
-                "policy=earliest-saturation-first, robot={0}, priorityQueue={1}, preferredRange={2}, queue={3}, saturationDeadline={4:0.##}, effectiveDeadline={5:0.##}, source={6}, period={7:0.##}, distanceTieCost={8:0.##}",
+                "policy=overflow-urgency, robot={0}, priorityQueue={1}, preferredArea={2}, queue={3}, overflowDeadline={4:0.##}, pressureLead={5:0.##}, adjustedDeadline={6:0.##}, travelCost={7:0.##}, areaPenalty={8:0.##}, dispatchCost={9:0.##}, source={10}, period={11:0.##}",
                 robotId,
-                hasPriorityQueue,
-                inPreferredRange,
-                snapshot.queueLength,
-                estimatedDeadline,
-                effectiveDeadline,
+                candidate.hasPriorityQueue,
+                candidate.inPreferredArea,
+                candidate.snapshot.queueLength,
+                candidate.overflowDeadline,
+                candidate.queuePressureLead,
+                candidate.pressureAdjustedDeadline,
+                candidate.travelCost,
+                candidate.areaPenalty,
+                candidate.dispatchCost,
                 deadlineSource,
-                snapshot.productionPeriod,
-                distanceCost);
+                candidate.snapshot.productionPeriod);
+        }
+
+        private struct PreferredAreaContext
+        {
+            public bool hasPreferredCandidate;
+            public float bestPreferredOverflowDeadline;
+        }
+
+        private struct TaskCandidate
+        {
+            public WorkTask task;
+            public ConveyorSnapshot snapshot;
+            public bool inPreferredArea;
+            public bool hasPriorityQueue;
+            public float overflowDeadline;
+            public float queuePressureLead;
+            public float pressureAdjustedDeadline;
+            public float travelCost;
+            public float areaPenalty;
+            public float dispatchCost;
         }
     }
 }

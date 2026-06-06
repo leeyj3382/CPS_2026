@@ -19,7 +19,7 @@ TaskAllocator.cs
 ## 파일별 작업
 
 - `EnvironmentScanner.cs`: `IEnvironmentInfo.GetQueueLength(1~10)`, `NextProductionAt(1~10)`, 생산 주기 상수와 Fleet가 넘긴 reservation/마지막 배정 시각을 이용해 `ConveyorSnapshot[]` 생성
-- `TaskAllocator.cs`: Fleet가 만든 미배정 `Pending` 작업 중 queue saturation deadline이 가장 이른 `WorkTask` 선택
+- `TaskAllocator.cs`: Fleet가 만든 미배정 `Pending` 작업 중 overflow 위험, queue pressure, 이동거리, 선호 영역을 종합해 `WorkTask` 선택
 - `FleetManager.cs`: scene에 붙이는 `MonoBehaviour`; 전체 loop 관리, task 생성/예약, RobotA/B idle 확인, `StartMission()` 호출, `MissionResult` callback 처리
 
 ## 입력
@@ -43,22 +43,25 @@ TaskAllocator.cs
 3. `TaskAllocator`가 queue가 0이거나 reservation된 컨베이어의 task를 후보에서 제외한다.
 4. RobotA/B 두 `IRobotAgent`의 상태를 확인한다.
 5. idle 또는 `CanAcceptTask == true`인 로봇만 작업 후보로 둔다.
-6. `TaskAllocator`로 saturation deadline이 가장 이른 pending task를 선택한다.
+6. `TaskAllocator`로 overflow/drop 위험 비용이 가장 낮은 pending task를 선택한다.
 7. 선택한 conveyor를 Fleet 내부에서 reservation 처리하고 task 상태를 `Reserved`/`Running`으로 전환한다.
 8. `MissionRequest`를 만들고 해당 RobotAgent의 `StartMission()`을 호출한다. 실행 중인 작업은 재선택하거나 중단하지 않는다.
 9. `MissionResult` callback에서 reservation을 해제하고 task 상태를 갱신한다.
 10. 실패하면 retry count 증가 또는 fail 처리 정책을 적용한다.
 
-## 선택 정책: Non-Preemptive EDF-Inspired
+## 선택 정책: Non-Preemptive Overflow-Urgency
 
-- CPU scheduling의 EDF에서 착안하여, queue가 capacity에 도달할 것으로 예상되는 시각이 가장 이른 pending task를 먼저 선택한다.
-- queue length가 capacity `3`에 이미 도달한 conveyor는 deadline이 즉시 도래한 것으로 보고 최우선으로 선택한다.
-- `nextProductionAt`이 유효하면 `nextProductionAt + (남은 칸 수 - 1) * productionPeriod`를 saturation deadline으로 사용한다.
-- 현재처럼 `nextProductionAt == -1`이면 `(남은 칸 수 * productionPeriod)`를 상대 deadline fallback으로 사용한다.
+- CPU scheduling의 EDF에서 착안하되, queue가 capacity에 도달하는 시각이 아니라 다음 overflow/drop이 발생할 것으로 예상되는 시각을 기준으로 둔다.
+- queue length가 capacity `3`에 이미 도달해도 무조건 최우선은 아니다. 다음 생산 시각이 늦은 full queue보다 빠른 conveyor의 near-full queue가 더 이르면 먼저 선택된다.
+- `nextProductionAt`이 유효하면 `nextProductionAt + (overflow까지 필요한 추가 생산 수 - 1) * productionPeriod`를 overflow deadline으로 사용한다.
+- 현재처럼 `nextProductionAt == -1`이면 `(overflow까지 필요한 추가 생산 수 * productionPeriod)`를 상대 deadline fallback으로 사용한다.
+- queue length는 deadline을 약간 앞당기는 queue pressure로 반영한다.
+- RobotA는 conveyor 1~3, RobotB는 conveyor 4~10을 선호한다. 단, 자기 영역 후보가 없거나 다른 영역의 overflow deadline이 충분히 빠르면 work stealing을 허용한다.
+- `OperatingStations`와 robot 위치 또는 station 추적값이 있으면 이동거리 비용을 더한다.
 - 이미 reservation된 conveyor는 제외
 - `Reserved` 또는 `Running` task는 후보가 아니며, 시작된 mission은 완료 callback까지 수행하는 non-preemptive 정책이다.
-- deadline이 같으면 짧은 생산 주기, 공식 station 기준 가까운 거리, 오래 배정되지 않은 conveyor, 오래된 task, 낮은 conveyor id 순서로 결정한다.
-- `priorityScore`에는 deadline이 이를수록 큰 값이 되도록 `-estimatedSaturationDeadline`을 기록한다.
+- 비용이 같으면 실제 overflow deadline, priority queue 여부, queue length, 선호 영역, 짧은 생산 주기, 이동거리, 오래 배정되지 않은 conveyor, 오래된 task, 낮은 conveyor id 순서로 결정한다.
+- `priorityScore`에는 선택 비용이 낮을수록 큰 값이 되도록 `-dispatchCost`를 기록한다.
 
 이 정책은 EDF에서 착안한 overflow 방지 heuristic이다. 로봇이 2대이고 mission 수행 시간이 별도 모델링되지 않았으므로 CPU EDF의 최적성 보장을 주장하지 않는다.
 
@@ -71,7 +74,7 @@ TaskAllocator.cs
 - `EnvironmentScanner`와 `TaskAllocator`는 `FleetManager`가 내부에서 생성하므로 GameObject에 직접 붙이지 않는다.
 - Slice B/D가 준비되면 `StudentBootstrap`이 `Configure(...)`로 `IRobotAgent` A/B와 `ITelemetryLogger`를 주입한다.
 - B/D가 아직 없으면 environment polling과 pending task 생성까지 실행할 수 있고, agent가 없으므로 mission dispatch는 수행하지 않는다.
-- 거리 동점 비교는 `enableDistanceTieBreaker`가 켜지고 `UpdateRobotSnapshot(...)`으로 실제 robot 위치를 공급하는 통합 단계에서 사용한다.
+- 이동거리 비용은 `enableTravelCost`가 켜지고 `UpdateRobotSnapshot(...)` 또는 robot station 추적값이 공급될 때 스케줄링 점수에 반영된다.
 
 ## 다른 슬라이스와의 연결
 

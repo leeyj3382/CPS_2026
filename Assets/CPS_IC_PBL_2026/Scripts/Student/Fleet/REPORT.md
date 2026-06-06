@@ -5,7 +5,7 @@
 Slice A Fleet의 관측 계층인 `EnvironmentScanner`, 작업 선택 계층인 `TaskAllocator`, scheduling 실행 계층인 `FleetManager`를 구현했다.
 
 - `EnvironmentScanner`는 `[LOCKED]` 환경 조회 API를 학생 계약인 `ConveyorSnapshot[]`으로 변환한다.
-- `TaskAllocator`는 Fleet가 만든 미배정 `Pending` 작업 중 queue saturation deadline이 가장 이른 작업을 non-preemptive EDF-inspired 방식으로 선택한다.
+- `TaskAllocator`는 Fleet가 만든 미배정 `Pending` 작업 중 overflow/drop 예상 시각, queue pressure, 이동거리, 선호 영역을 종합해 non-preemptive 방식으로 선택한다.
 - `FleetManager`는 task 생성, reservation 설정/해제, available robot 판단, `MissionRequest` 전달과 `MissionResult` 결과 처리를 담당한다.
 - 실제 robot motion, classification, palletizing, Safety lock, logger 구현과 scene 통합은 다른 슬라이스 및 통합 단계에 남아 있다.
 
@@ -95,40 +95,38 @@ scanner는 queue가 `0`인 conveyor도 관측 결과에 포함한다. queue가 �
 
 ### 5.2 정책 변경 판단
 
-초기 구현은 queue length, 생산 주기, 거리와 대기 순서를 하나의 가중치 점수로 합산했다. 이 방식은 점수 계수에 따라 실제로 먼저 가득 찰 conveyor가 뒤로 밀릴 수 있고, overflow 방지라는 Fleet의 목적을 직접 표현하지 못한다.
+기존 구현은 full queue를 하드 우선순위로 두고 saturation deadline을 비교했다. 이 경우 느린 conveyor가 방금 3개를 채웠다는 이유만으로, 더 빠른 conveyor가 곧 overflow될 상황을 놓칠 수 있다.
 
-따라서 CPU scheduling의 EDF(Earliest Deadline First)에서 착안하여, 각 conveyor의 queue가 capacity에 도달할 예상 시각을 deadline으로 정의하고 가장 이른 deadline을 먼저 선택하도록 변경했다. 이미 배정되어 실행 중인 mission은 중단할 수 없으므로, 대상은 미배정 `Pending` task로 제한하는 non-preemptive 방식이다.
+새 구현은 CPU scheduling의 EDF(Earliest Deadline First)에서 착안하되, queue가 가득 차는 시각이 아니라 다음 overflow/drop이 발생할 것으로 예상되는 시각을 deadline으로 둔다. 여기에 queue pressure, 로봇 이동거리, RobotA/B의 약한 영역 선호를 더한 `dispatchCost`가 가장 낮은 task를 선택한다.
 
-이 방식이 현재 과제 구조에 더 적합한 이유는 다음과 같다.
-
-- 과제에서 중요한 실패 위험은 빠른 conveyor의 queue overflow이며, saturation deadline은 이를 직접 비교한다.
-- `ConveyorSnapshot`의 queue length, 생산 주기, `nextProductionAt`만으로 계산 가능하여 Common 계약을 확장하지 않는다.
-- `Reserved`/`Running` task를 제외하므로 B 슬라이스의 실행 중 미션과 충돌하지 않는다.
-- 임의 가중치 튜닝보다 선택 이유를 telemetry와 시연에서 설명하기 쉽다.
-
-예를 들어 공식 생산 예정 시각이 없는 상태에서 queue `1`, period `15`인 conveyor는 `30`초 뒤 포화가 예상되고, queue `2`, period `90`인 conveyor는 `90`초 뒤 포화가 예상된다. 단순 queue length 우선과 달리 새 정책은 먼저 가득 찰 빠른 conveyor를 선택한다.
+- `ConveyorSnapshot`의 queue length, 생산 주기, `nextProductionAt`만으로 overflow deadline을 계산한다.
+- queue length는 deadline을 약간 앞당기는 pressure로 반영하되, full queue를 무조건 최우선으로 만들지는 않는다.
+- RobotA는 conveyor 1~3, RobotB는 conveyor 4~10을 선호한다.
+- 자기 영역 후보가 없거나 다른 영역의 overflow deadline이 충분히 빠르면 work stealing을 허용한다.
+- `Reserved`/`Running` task를 제외하므로 실행 중 mission은 선점하지 않는다.
 
 단, 이 구현은 두 대의 robot과 mission 수행 시간까지 분석하는 정식 실시간 EDF 스케줄러가 아니라 overflow를 줄이기 위한 EDF-inspired heuristic이다.
 
 ### 5.3 Deadline 계산 및 선택 순서
 
-queue가 아직 가득 차지 않은 경우의 saturation deadline은 다음처럼 계산한다.
+overflow deadline은 다음처럼 계산한다.
 
 ```text
-estimatedSaturationDeadline =
-    nextProductionAt + (slotsUntilFull - 1) * productionPeriod
+estimatedOverflowDeadline =
+    nextProductionAt + (overflow까지 필요한 추가 생산 수 - 1) * productionPeriod
 
 fallback when NextProductionAt is unavailable =
-    slotsUntilFull * productionPeriod
+    overflow까지 필요한 추가 생산 수 * productionPeriod
 ```
 
-- queue capacity인 `3`에 도달한 후보는 deadline이 이미 도래한 것으로 보고 다른 후보보다 먼저 선택한다.
-- 평가 대상인 non-full 후보 모두에서 `nextProductionAt`이 유효할 때만 공식 생산 예정 시각을 사용한다.
-- 한 후보라도 공식 시각이 `-1f`이면 전 후보를 생산 주기 기반 상대 deadline으로 비교하여 절대 시각과 상대 시간을 섞지 않는다.
-- deadline이 같으면 짧은 생산 주기, 공식 station 기준 가까운 거리, 작은 `lastAssignedAt`, 오래 생성된 task, 낮은 conveyor id 순으로 선택한다.
-- `OperatingStations`가 주입되지 않으면 거리 tie-break cost는 `0`이다.
+- queue capacity인 `3`에 이미 도달한 후보는 다음 생산 시각을 overflow deadline으로 본다.
+- `nextProductionAt`이 유효하면 공식 생산 예정 시각을 사용한다.
+- 공식 시각을 쓸 수 없으면 생산 주기 기반 상대 deadline으로 비교한다.
+- 최종 비용은 pressure-adjusted deadline, 이동거리 비용, 영역 penalty의 합이다.
+- 비용이 같으면 실제 overflow deadline, priority queue 여부, queue length, 선호 영역, 짧은 생산 주기, 이동거리, 작은 `lastAssignedAt`, 오래 생성된 task, 낮은 conveyor id 순으로 선택한다.
+- `OperatingStations` 또는 robot 위치 정보가 없으면 이동거리 비용은 `0`이다.
 
-평가된 후보의 `priorityScore`에는 deadline이 이를수록 큰 값이 되도록 `-estimatedSaturationDeadline`을 기록한다. `debugReason`에는 정책명, 계산된 deadline, 공식 시각 사용 여부 또는 fallback, queue, 생산 주기, 거리 tie-break cost를 기록한다.
+평가된 후보의 `priorityScore`에는 선택 비용이 낮을수록 큰 값이 되도록 `-dispatchCost`를 기록한다. `debugReason`에는 정책명, overflow deadline, queue pressure, 이동거리 비용, 영역 penalty, 최종 dispatch cost를 기록한다.
 
 ### 5.4 Non-Preemption과 allocator 책임 경계
 
@@ -185,11 +183,11 @@ agent가 등록되지 않은 상태에서는 환경 관측과 pending task 생�
 | 생산 주기를 기존 `StudentConstants`에서 재사용하는가 | 일치 |
 | reservation 상태를 Fleet 소유 상태로 유지하는가 | 일치 |
 | queue `0` 및 reservation 후보 제외를 allocator가 처리하는가 | 일치 |
-| capacity `3`인 queue가 즉시 deadline으로 최우선인가 | 일치 |
-| non-full task를 earliest saturation deadline 순으로 비교하는가 | 일치 |
+| capacity `3`인 queue의 다음 생산 시각을 overflow deadline으로 보는가 | 일치 |
+| full queue를 무조건 최우선하지 않고 overflow/drop 예상 시각을 비교하는가 | 일치 |
 | 실행 중인 `Reserved`/`Running` task를 선점하지 않는가 | 일치 |
 | `ITaskAllocator` 및 `StudentRobotSnapshot` 계약을 사용하는가 | 일치 |
-| 거리 tie-breaker가 공식 `OperatingStations` 좌표만 사용하는가 | 일치 |
+| 이동거리 비용이 공식 `OperatingStations` 좌표와 robot 위치/station 추적값을 사용하는가 | 일치 |
 | `NextProductionAt() == -1` 시 생산 주기 fallback deadline을 적용하는가 | 일치 |
 | `FleetManager`가 task와 conveyor reservation을 소유하는가 | 일치 |
 | `MissionRequest` 전달과 `MissionResult` callback 상태 갱신을 구현하는가 | 일치 |

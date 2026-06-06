@@ -21,7 +21,7 @@ namespace CPS.ICPBL.Student
         [SerializeField, Min(0.05f)] private float pollingIntervalSec = 0.25f;
         [SerializeField, Min(0)] private int maxRetryCount = 1;
         [SerializeField] private bool runAutomatically = true;
-        [SerializeField] private bool enableDistanceTieBreaker;
+        [SerializeField] private bool enableTravelCost = true;
         [SerializeField] private bool logEventsWithoutTelemetry = true;
         [SerializeField, Min(0f)] private float postPickConveyorCooldownSec = 0f;
 
@@ -106,8 +106,7 @@ namespace CPS.ICPBL.Student
             operatingStations = stationData;
             telemetryLogger = logger;
             environmentScanner = new EnvironmentScanner(environmentInfo);
-            taskAllocator = new TaskAllocator(
-                enableDistanceTieBreaker ? operatingStations : null);
+            taskAllocator = new TaskAllocator(enableTravelCost ? operatingStations : null);
             nextPollingAt = 0f;
         }
 
@@ -271,9 +270,37 @@ namespace CPS.ICPBL.Student
 
         private void DispatchAvailableRobots(ConveyorSnapshot[] snapshots)
         {
+            var availableRobots = new List<IRobotAgent>(robotAgents.Count);
             for (int i = 0; i < robotAgents.Count; i++)
             {
                 IRobotAgent robotAgent = robotAgents[i];
+                if (CanDispatch(robotAgent))
+                {
+                    availableRobots.Add(robotAgent);
+                }
+            }
+
+            if (availableRobots.Count == 0)
+            {
+                return;
+            }
+
+            if (availableRobots.Count > 1)
+            {
+                DispatchAvailableRobotsPass(snapshots, availableRobots, false);
+            }
+
+            DispatchAvailableRobotsPass(snapshots, availableRobots, true);
+        }
+
+        private void DispatchAvailableRobotsPass(
+            ConveyorSnapshot[] snapshots,
+            List<IRobotAgent> availableRobots,
+            bool allowWorkStealing)
+        {
+            for (int i = 0; i < availableRobots.Count; i++)
+            {
+                IRobotAgent robotAgent = availableRobots[i];
                 if (!CanDispatch(robotAgent))
                 {
                     continue;
@@ -289,7 +316,8 @@ namespace CPS.ICPBL.Student
                 WorkTask selectedTask = taskAllocator.SelectBestTask(
                     snapshots,
                     robotSnapshot,
-                    pendingTasks);
+                    pendingTasks,
+                    allowWorkStealing);
 
                 if (selectedTask == null)
                 {
@@ -339,6 +367,11 @@ namespace CPS.ICPBL.Student
             snapshot.state = robotAgent.State;
             snapshot.currentTaskId =
                 inFlightTask != null ? inFlightTask.taskId : StudentConstants.NoTaskId;
+            if (robotAgent is IRobotStationTracker stationTracker)
+            {
+                snapshot.currentStationId = stationTracker.CurrentStationId;
+            }
+
             return snapshot;
         }
 
