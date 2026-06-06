@@ -1154,24 +1154,33 @@ namespace CPS.ICPBL.Student
             dependencies.SetState?.Invoke(RobotRuntimeState.Inspecting);
 
             int attempts = Mathf.Max(0, settings.ColorRetryCount) + 1;
+            Color lastSensedColor = StudentConstants.DefaultSensorColor;
+            string lastColorSource = string.Empty;
+            string lastClassifierMessage = string.Empty;
             for (int attempt = 0; attempt < attempts; attempt++)
             {
-                Color sensedColor = ReadSensedColor();
+                Color sensedColor = ReadSensedColor(out string colorSource);
+                lastSensedColor = sensedColor;
+                lastColorSource = colorSource;
                 ColorClassificationResult classification =
                     dependencies.ColorClassifier.Classify(sensedColor);
                 context.Classification = classification;
 
                 if (classification != null)
                 {
+                    lastClassifierMessage = classification.message;
                     context.Result.classificationResult = classification.result;
                     LogMessage("Color", string.Format(
-                        "Classified task={0} robot={1} result={2} reliable={3} blueDistance={4:0.000} redDistance={5:0.000}.",
+                        "Classified task={0} robot={1} result={2} reliable={3} source={4} sensed={5} blueDistance={6:0.000} redDistance={7:0.000} message={8}.",
                         context.Request.taskId,
                         context.Request.robotId,
                         classification.result,
                         classification.reliable,
+                        colorSource,
+                        FormatColor(sensedColor),
                         classification.blueDistance,
-                        classification.redDistance));
+                        classification.redDistance,
+                        classification.message));
 
                     if (classification.reliable
                         && StudentConstants.TryGetBoxType(
@@ -1191,19 +1200,69 @@ namespace CPS.ICPBL.Student
                 }
             }
 
-            Fail(context, MissionFailureReason.ClassificationFailed, "Color classification was unreliable or unknown.");
+            Fail(context, MissionFailureReason.ClassificationFailed, string.Format(
+                "Color classification was unreliable or unknown. source={0} sensed={1} message={2}",
+                string.IsNullOrEmpty(lastColorSource) ? "unknown" : lastColorSource,
+                FormatColor(lastSensedColor),
+                string.IsNullOrEmpty(lastClassifierMessage) ? "No classifier result." : lastClassifierMessage));
         }
 
-        private Color ReadSensedColor()
+        private Color ReadSensedColor(out string source)
         {
+            if (dependencies.Gripper != null && dependencies.Gripper.IsHolding)
+            {
+                if (dependencies.Gripper.TryReadHeldObjectColor(out Color heldColor, out source))
+                {
+                    return heldColor;
+                }
+
+                string heldColorFailure = source;
+                if (dependencies.ColorSensor != null && dependencies.ColorSensor.area != null)
+                {
+                    source = string.Format(
+                        "{0}; fallback=ColorSensor.area:{1}",
+                        heldColorFailure,
+                        dependencies.ColorSensor.area.name);
+                    return dependencies.ColorSensor.area.color;
+                }
+
+                if (dependencies.ColorArea != null)
+                {
+                    source = string.Format(
+                        "{0}; fallback=ColorArea:{1}",
+                        heldColorFailure,
+                        dependencies.ColorArea.name);
+                    return dependencies.ColorArea.color;
+                }
+
+                source = heldColorFailure;
+                return StudentConstants.DefaultSensorColor;
+            }
+
             if (dependencies.ColorSensor != null && dependencies.ColorSensor.area != null)
             {
+                source = string.Format("ColorSensor.area:{0}", dependencies.ColorSensor.area.name);
                 return dependencies.ColorSensor.area.color;
             }
 
-            return dependencies.ColorArea != null
-                ? dependencies.ColorArea.color
-                : StudentConstants.DefaultSensorColor;
+            if (dependencies.ColorArea != null)
+            {
+                source = string.Format("ColorArea:{0}", dependencies.ColorArea.name);
+                return dependencies.ColorArea.color;
+            }
+
+            source = "DefaultSensorColor";
+            return StudentConstants.DefaultSensorColor;
+        }
+
+        private static string FormatColor(Color color)
+        {
+            return string.Format(
+                "rgba({0:0.000},{1:0.000},{2:0.000},{3:0.000})",
+                color.r,
+                color.g,
+                color.b,
+                color.a);
         }
 
         private IEnumerator RunPlaceSequence(MissionContext context)
