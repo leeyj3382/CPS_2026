@@ -134,7 +134,7 @@ namespace CPS.ICPBL.Student
             }
         }
 
-        public void Release()
+        public void Release(bool enableGravity = false)
         {
             if (gripper == null)
             {
@@ -142,7 +142,23 @@ namespace CPS.ICPBL.Student
                 return;
             }
 
+            PickableObject releasedObject = gripper.HeldObject;
             gripper.Release();
+
+            if (!enableGravity || releasedObject == null)
+            {
+                return;
+            }
+
+            Rigidbody body = releasedObject.TargetRigidbody;
+            if (body == null)
+            {
+                return;
+            }
+
+            body.isKinematic = false;
+            body.useGravity = true;
+            body.detectCollisions = true;
         }
     }
 }

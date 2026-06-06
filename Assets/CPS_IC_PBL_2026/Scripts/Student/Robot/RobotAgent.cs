@@ -38,6 +38,16 @@ namespace CPS.ICPBL.Student
         [SerializeField, Min(0f)] private float colorRetryWaitSec = 0.1f;
         [SerializeField, Min(0)] private int colorRetryCount = 1;
 
+        [Header("Box Column Alignment")]
+        [SerializeField] private float boxColumnRightOffset = 0.3f;
+        [SerializeField, Min(0f)] private float normalBoxForwardOffset = 0.2f;
+        [SerializeField, Min(0.01f)] private float placeVerticalStep = 0.05f;
+        [SerializeField, Min(0f)] private float placeReleaseHeight = 0.03f;
+
+        [Header("Conveyor Pick Alignment")]
+        [SerializeField] private float conveyorPickRightOffset = 0.25f;
+        [SerializeField] private float conveyorPoint1LateralOffset = -0.6f;
+
         [Header("Debug")]
         [SerializeField] private bool logWithoutTelemetry = true;
 
@@ -106,6 +116,8 @@ namespace CPS.ICPBL.Student
             gripRetryCount = Mathf.Max(0, gripRetryCount);
             colorRetryWaitSec = Mathf.Max(0f, colorRetryWaitSec);
             colorRetryCount = Mathf.Max(0, colorRetryCount);
+            placeVerticalStep = Mathf.Max(0.01f, placeVerticalStep);
+            placeReleaseHeight = Mathf.Max(0f, placeReleaseHeight);
             debugConveyorId = Mathf.Clamp(
                 debugConveyorId,
                 StudentConstants.MinConveyorId,
@@ -477,7 +489,13 @@ namespace CPS.ICPBL.Student
                 GripRetryWaitSec = gripRetryWaitSec,
                 GripRetryCount = gripRetryCount,
                 ColorRetryWaitSec = colorRetryWaitSec,
-                ColorRetryCount = colorRetryCount
+                ColorRetryCount = colorRetryCount,
+                BoxColumnRightOffset = boxColumnRightOffset,
+                ConveyorPickRightOffset = conveyorPickRightOffset,
+                ConveyorPoint1LateralOffset = conveyorPoint1LateralOffset,
+                NormalBoxForwardOffset = normalBoxForwardOffset,
+                PlaceVerticalStep = placeVerticalStep,
+                PlaceReleaseHeight = placeReleaseHeight
             };
         }
 

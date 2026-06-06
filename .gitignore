@@ -85,3 +85,6 @@ desktop.ini
 # =============================================================================
 # Built distribution zips live outside the repo per CLAUDE.md §4
 # (Builds/ is already covered by the [Bb]uilds/ pattern above)
+
+# Local duplicate project copy; do not commit this nested Unity project.
+/CPS_2026/

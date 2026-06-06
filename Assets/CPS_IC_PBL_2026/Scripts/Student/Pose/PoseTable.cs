@@ -13,8 +13,8 @@ namespace CPS.ICPBL.Student
         [SerializeField] private OperatingStations operatingStations;
 
         [Header("Conveyor Pick Offsets")]
-        [SerializeField] private Vector3 conveyorApproachOffset = new Vector3(0f, 0.25f, 0f);
-        [SerializeField] private Vector3 conveyorActionOffset = new Vector3(0f, -0.35f, 0f);
+        [SerializeField] private Vector3 conveyorApproachOffset = new Vector3(0f, 0.2f, 0f);
+        [SerializeField] private Vector3 conveyorActionOffset = new Vector3(0f, -0.2f, 0f);
         [SerializeField] private Vector3 conveyorRetractOffset = new Vector3(0f, 0.35f, 0f);
         [SerializeField] private float conveyorArmMoveDuration = StudentConstants.DefaultArmMoveDurationSec;
 

@@ -7917,6 +7917,12 @@ MonoBehaviour:
   gripRetryCount: 1
   colorRetryWaitSec: 0.1
   colorRetryCount: 1
+  boxColumnRightOffset: 0.3
+  normalBoxForwardOffset: 0.2
+  placeVerticalStep: 0.05
+  placeReleaseHeight: 0.03
+  conveyorPickRightOffset: 0.25
+  conveyorPoint1LateralOffset: -0.6
   logWithoutTelemetry: 1
   debugConveyorId: 1
   debugTaskId: 9001
@@ -8322,7 +8328,7 @@ MonoBehaviour:
   pollingIntervalSec: 0.25
   maxRetryCount: 1
   runAutomatically: 1
-  enableDistanceTieBreaker: 0
+  enableTravelCost: 1
   logEventsWithoutTelemetry: 1
   postPickConveyorCooldownSec: 0
   enableInitialPrepositioning: 1
@@ -8467,17 +8473,22 @@ MonoBehaviour:
   normalBoxTrigger: {fileID: 242586149}
   abnormalBoxTrigger: {fileID: 196160528}
   registerBoxTriggerOnCommit: 1
-  columns: 6
-  rows: 4
+  normalColumns: 6
+  normalRows: 3
+  normalSlotSpacing: {x: 0.3, y: 0, z: 0.3}
+  normalGridOriginOffset: {x: 0, y: 0, z: 0}
+  normalRobotSideOffset: {x: 0, y: 0, z: 0}
+  abnormalColumns: 3
+  abnormalRows: 4
+  abnormalSlotSpacing: {x: 0.3, y: 0, z: 0.3}
+  abnormalGridOriginOffset: {x: 0, y: 0, z: 0}
+  abnormalRobotSideOffset: {x: -0.2, y: 0, z: 0}
   normalSlotCount: 52
   abnormalSlotCount: 12
-  slotSpacing: {x: 0.32, y: 0, z: 0.32}
-  layerHeight: 0.22
-  normalGridOriginOffset: {x: -0.8, y: 0, z: -0.48}
-  abnormalGridOriginOffset: {x: -0.8, y: 0, z: -0.48}
+  layerHeight: 0.28
   fitGridToBoxBounds: 1
   horizontalPadding: 0.1
-  verticalPadding: 0.02
+  verticalPadding: 0.25
   placeApproachOffset: {x: 0, y: 0.35, z: 0}
   placeRetractOffset: {x: 0, y: 0.45, z: 0}
   drawGizmos: 1
@@ -8500,8 +8511,8 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   operatingStations: {fileID: 11400000, guid: 667bb907820e74b4f8756d19fbc1c215, type: 2}
-  conveyorApproachOffset: {x: 0, y: 0.25, z: 0}
-  conveyorActionOffset: {x: 0, y: -0.35, z: 0}
+  conveyorApproachOffset: {x: 0, y: 0.2, z: 0}
+  conveyorActionOffset: {x: 0, y: -0.2, z: 0}
   conveyorRetractOffset: {x: 0, y: 0.35, z: 0}
   conveyorArmMoveDuration: 0.7
   boxApproachOffset: {x: 0, y: 0.55, z: 0}
@@ -8787,6 +8798,12 @@ MonoBehaviour:
   gripRetryCount: 1
   colorRetryWaitSec: 0.1
   colorRetryCount: 1
+  boxColumnRightOffset: 0.3
+  normalBoxForwardOffset: 0.2
+  placeVerticalStep: 0.05
+  placeReleaseHeight: 0.03
+  conveyorPickRightOffset: 0.25
+  conveyorPoint1LateralOffset: -0.6
   logWithoutTelemetry: 1
   debugConveyorId: 1
   debugTaskId: 9001

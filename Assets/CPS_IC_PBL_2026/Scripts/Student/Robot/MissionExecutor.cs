@@ -52,6 +52,12 @@ namespace CPS.ICPBL.Student
             public float BaseStopSettleSec = 0.05f;
             public float BaseBlockedEscapeSec = 2f;
             public bool EnableDestinationBoxStaging = true;
+            public float BoxColumnRightOffset = 0.3f;
+            public float ConveyorPickRightOffset = 0.25f;
+            public float ConveyorPoint1LateralOffset = -0.6f;
+            public float NormalBoxForwardOffset = 0.2f;
+            public float PlaceVerticalStep = 0.05f;
+            public float PlaceReleaseHeight = 0.03f;
         }
 
         private sealed class MissionContext
@@ -1157,6 +1163,12 @@ namespace CPS.ICPBL.Student
                 yield break;
             }
 
+            yield return AlignBaseToConveyorPoint1(context);
+            if (context.Failed)
+            {
+                yield break;
+            }
+
             ResourceKey armKey = new ResourceKey(
                 LockResourceType.RobotArmZone,
                 context.Request.conveyorId);
@@ -1369,6 +1381,12 @@ namespace CPS.ICPBL.Student
                 yield break;
             }
 
+            yield return AlignBaseToReservedSlotColumn(context);
+            if (context.Failed)
+            {
+                yield break;
+            }
+
             dependencies.SetState?.Invoke(RobotRuntimeState.Placing);
             ResourceKey armKey = new ResourceKey(
                 LockResourceType.RobotArmZone,
@@ -1390,14 +1408,21 @@ namespace CPS.ICPBL.Student
                 yield break;
             }
 
-            yield return MoveArmTo(context, context.ReservedSlot.placePos, StudentConstants.DefaultArmMoveDurationSec, "place action");
+            Vector3 releasePosition = context.ReservedSlot.placePos
+                + (Vector3.up * Mathf.Max(0f, settings.PlaceReleaseHeight));
+            yield return MoveArmVertically(
+                context,
+                context.ReservedSlot.approachPos,
+                releasePosition,
+                StudentConstants.DefaultArmMoveDurationSec,
+                "place vertical descent");
             if (context.Failed)
             {
                 yield break;
             }
 
             dependencies.SetState?.Invoke(RobotRuntimeState.Releasing);
-            dependencies.Gripper.Release();
+            dependencies.Gripper.Release(enableGravity: true);
             yield return null;
             if (dependencies.Gripper.IsHolding)
             {
@@ -1409,13 +1434,142 @@ namespace CPS.ICPBL.Student
             dependencies.Palletizer.CommitSlot(context.Request.taskId);
             context.SlotCommitted = true;
 
-            yield return MoveArmTo(context, context.ReservedSlot.retractPos, StudentConstants.DefaultArmMoveDurationSec, "place retract");
+            yield return MoveArmVertically(
+                context,
+                releasePosition,
+                context.ReservedSlot.retractPos,
+                StudentConstants.DefaultArmMoveDurationSec,
+                "place vertical retract");
             if (context.Failed)
             {
                 yield break;
             }
 
             ReleaseKey(context, armKey);
+        }
+
+        private IEnumerator MoveArmVertically(
+            MissionContext context,
+            Vector3 from,
+            Vector3 to,
+            float totalDurationSec,
+            string label)
+        {
+            float distance = Mathf.Abs(to.y - from.y);
+            float stepSize = Mathf.Max(0.01f, settings.PlaceVerticalStep);
+            int stepCount = Mathf.Max(1, Mathf.CeilToInt(distance / stepSize));
+            float stepDuration = Mathf.Max(0.01f, totalDurationSec / stepCount);
+
+            for (int step = 1; step <= stepCount; step++)
+            {
+                float t = step / (float)stepCount;
+                Vector3 waypoint = new Vector3(
+                    to.x,
+                    Mathf.Lerp(from.y, to.y, t),
+                    to.z);
+                yield return MoveArmTo(
+                    context,
+                    waypoint,
+                    stepDuration,
+                    string.Format("{0} {1}/{2}", label, step, stepCount));
+                if (context.Failed)
+                {
+                    yield break;
+                }
+            }
+        }
+
+        private IEnumerator AlignBaseToConveyorPoint1(MissionContext context)
+        {
+            if (dependencies.OperatingStations == null
+                || !dependencies.OperatingStations.TryGetStation(
+                    context.Request.conveyorId,
+                    out OperatingStations.Station station))
+            {
+                yield break;
+            }
+
+            Vector3 lateralAxis = Quaternion.Euler(0f, station.BaseYawDeg, 0f) * Vector3.right;
+            float lateralOffset = settings.ConveyorPoint1LateralOffset
+                + settings.ConveyorPickRightOffset;
+            Vector3 targetPosition = station.BasePosition + (lateralAxis * lateralOffset);
+            targetPosition.y = station.BasePosition.y;
+
+            if (Vector3.Distance(
+                FlattenXZ(targetPosition - dependencies.Controller.Position),
+                Vector3.zero) <= 0.05f)
+            {
+                yield break;
+            }
+
+            LogMessage("Path", string.Format(
+                "Robot={0} task={1} aligning base to conveyor={2} point1 target=({3:0.00},{4:0.00}).",
+                context.Request.robotId,
+                context.Request.taskId,
+                context.Request.conveyorId,
+                targetPosition.x,
+                targetPosition.z));
+
+            dependencies.SetState?.Invoke(RobotRuntimeState.MovingToConveyor);
+            RegisterActiveBasePath(context, targetPosition);
+            dependencies.Controller.MoveBaseTo(targetPosition);
+            yield return WaitForBaseMoveWithDynamicStop(
+                context,
+                context.Request.conveyorId,
+                targetPosition,
+                "conveyor point1 alignment",
+                () => dependencies.Controller.MoveBaseTo(targetPosition));
+            ClearActiveBasePath(context);
+        }
+
+        private IEnumerator AlignBaseToReservedSlotColumn(MissionContext context)
+        {
+            if (dependencies.OperatingStations == null
+                || !dependencies.OperatingStations.TryGetStation(
+                    context.Result.destinationStationId,
+                    out OperatingStations.Station station))
+            {
+                yield break;
+            }
+
+            Vector3 lateralAxis = Quaternion.Euler(0f, station.BaseYawDeg, 0f) * Vector3.right;
+            Vector3 slotOffset = context.ReservedSlot.placePos - station.ArmAnchorPoint;
+            slotOffset.y = 0f;
+            Vector3 targetPosition = station.BasePosition
+                + Vector3.Project(slotOffset, lateralAxis)
+                + (lateralAxis * settings.BoxColumnRightOffset);
+            if (context.DestinationBoxType == BoxType.Normal)
+            {
+                Vector3 forwardAxis = Quaternion.Euler(0f, station.BaseYawDeg, 0f) * Vector3.forward;
+                targetPosition += forwardAxis * settings.NormalBoxForwardOffset;
+            }
+            targetPosition.y = station.BasePosition.y;
+
+            if (Vector3.Distance(
+                FlattenXZ(targetPosition - dependencies.Controller.Position),
+                Vector3.zero) <= 0.05f)
+            {
+                yield break;
+            }
+
+            LogMessage("Path", string.Format(
+                "Robot={0} task={1} aligning base to box slot={2} column target=({3:0.00},{4:0.00}).",
+                context.Request.robotId,
+                context.Request.taskId,
+                context.ReservedSlot.slotIndex,
+                targetPosition.x,
+                targetPosition.z));
+
+            dependencies.SetState?.Invoke(RobotRuntimeState.MovingToBox);
+            RegisterActiveBasePath(context, targetPosition);
+            dependencies.Controller.MoveBaseTo(targetPosition);
+            yield return WaitForBaseMoveWithDynamicStop(
+                context,
+                context.Result.destinationStationId,
+                targetPosition,
+                "box column alignment",
+                () => dependencies.Controller.MoveBaseTo(targetPosition));
+            ClearActiveBasePath(context);
         }
 
         private IEnumerator MoveArmTo(
