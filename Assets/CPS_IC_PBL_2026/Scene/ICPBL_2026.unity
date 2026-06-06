@@ -7903,7 +7903,6 @@ MonoBehaviour:
   suctionGripper: {fileID: 0}
   colorSensor: {fileID: 0}
   colorArea: {fileID: 0}
-  environmentInfoComponent: {fileID: 1504378417}
   poseProviderComponent: {fileID: 0}
   palletizerComponent: {fileID: 0}
   colorClassifierComponent: {fileID: 0}
@@ -7914,7 +7913,6 @@ MonoBehaviour:
   moveTimeoutSec: 15
   lockTimeoutSec: 5
   gripReadyTimeoutSec: 3
-  conveyorQueueWaitSec: 6
   gripRetryWaitSec: 0.2
   gripRetryCount: 1
   colorRetryWaitSec: 0.1
@@ -8327,9 +8325,6 @@ MonoBehaviour:
   enableDistanceTieBreaker: 0
   logEventsWithoutTelemetry: 1
   postPickConveyorCooldownSec: 0
-  enableAnticipatedConveyorTasks: 1
-  anticipatedTaskLookaheadSec: 4
-  anticipatedTaskGraceSec: 4
 --- !u!114 &2140976385
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -8403,8 +8398,6 @@ MonoBehaviour:
   crossingPriorityMargin: 0.8
   pathStartPriorityMarginSec: 0.15
   activePathStaleSec: 45
-  defaultPriorityRobotId: 0
-  defaultPriorityRobotWinsTies: 1
   enableLaneRouting: 0
   robotALaneX: -7.2
   robotBLaneX: 7.2
@@ -8479,10 +8472,8 @@ MonoBehaviour:
   layerHeight: 0.22
   normalGridOriginOffset: {x: -0.8, y: 0, z: -0.48}
   abnormalGridOriginOffset: {x: -0.8, y: 0, z: -0.48}
-  normalGridYawDegrees: 0
-  abnormalGridYawDegrees: 0
   fitGridToBoxBounds: 1
-  horizontalPadding: 0.16
+  horizontalPadding: 0.1
   verticalPadding: 0.02
   placeApproachOffset: {x: 0, y: 0.35, z: 0}
   placeRetractOffset: {x: 0, y: 0.45, z: 0}
@@ -8506,10 +8497,10 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   operatingStations: {fileID: 11400000, guid: 667bb907820e74b4f8756d19fbc1c215, type: 2}
-  conveyorApproachOffset: {x: 0, y: -0.35, z: 0}
+  conveyorApproachOffset: {x: 0, y: 0.25, z: 0}
   conveyorActionOffset: {x: 0, y: -0.35, z: 0}
-  conveyorRetractOffset: {x: 0, y: -0.05, z: 0}
-  conveyorArmMoveDuration: 0.55
+  conveyorRetractOffset: {x: 0, y: 0.35, z: 0}
+  conveyorArmMoveDuration: 1
   boxApproachOffset: {x: 0, y: 0.55, z: 0}
   boxActionOffset: {x: 0, y: 0.2, z: 0}
   boxRetractOffset: {x: 0, y: 0.65, z: 0}
@@ -8779,7 +8770,6 @@ MonoBehaviour:
   suctionGripper: {fileID: 0}
   colorSensor: {fileID: 0}
   colorArea: {fileID: 0}
-  environmentInfoComponent: {fileID: 1504378417}
   poseProviderComponent: {fileID: 0}
   palletizerComponent: {fileID: 0}
   colorClassifierComponent: {fileID: 0}
@@ -8790,7 +8780,6 @@ MonoBehaviour:
   moveTimeoutSec: 15
   lockTimeoutSec: 5
   gripReadyTimeoutSec: 3
-  conveyorQueueWaitSec: 6
   gripRetryWaitSec: 0.2
   gripRetryCount: 1
   colorRetryWaitSec: 0.1

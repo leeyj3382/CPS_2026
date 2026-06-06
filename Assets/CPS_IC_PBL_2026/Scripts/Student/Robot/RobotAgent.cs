@@ -8,7 +8,7 @@ using UnityEngine;
 namespace CPS.ICPBL.Student
 {
     [DisallowMultipleComponent]
-    public sealed class RobotAgent : MonoBehaviour, IRobotAgent
+    public sealed class RobotAgent : MonoBehaviour, IRobotAgent, IRobotStationTracker
     {
         [Header("Robot References")]
         [SerializeField] private int robotId = StudentConstants.RobotAId;
@@ -16,9 +16,6 @@ namespace CPS.ICPBL.Student
         [SerializeField] private SuctionGripper suctionGripper;
         [SerializeField] private global::ColorSensor colorSensor;
         [SerializeField] private global::ColorArea colorArea;
-
-        [Header("Environment")]
-        [SerializeField] private MonoBehaviour environmentInfoComponent;
 
         [Header("Student Service References")]
         [SerializeField] private MonoBehaviour poseProviderComponent;
@@ -36,7 +33,6 @@ namespace CPS.ICPBL.Student
             StudentConstants.DefaultLockTimeoutSec;
         [SerializeField, Min(0.1f)] private float gripReadyTimeoutSec =
             StudentConstants.DefaultGripReadyTimeoutSec;
-        [SerializeField, Min(0f)] private float conveyorQueueWaitSec = 6f;
         [SerializeField, Min(0f)] private float gripRetryWaitSec = 0.2f;
         [SerializeField, Min(0)] private int gripRetryCount = 1;
         [SerializeField, Min(0f)] private float colorRetryWaitSec = 0.1f;
@@ -51,7 +47,6 @@ namespace CPS.ICPBL.Student
         [SerializeField] private bool logDebugMissionResult = true;
 
         private IRobotController robotController;
-        private IEnvironmentInfo environmentInfo;
         private IPoseProvider poseProvider;
         private IPalletizer palletizer;
         private IColorClassifier colorClassifier;
@@ -105,7 +100,6 @@ namespace CPS.ICPBL.Student
             moveTimeoutSec = Mathf.Max(0.1f, moveTimeoutSec);
             lockTimeoutSec = Mathf.Max(0.1f, lockTimeoutSec);
             gripReadyTimeoutSec = Mathf.Max(0.1f, gripReadyTimeoutSec);
-            conveyorQueueWaitSec = Mathf.Max(0f, conveyorQueueWaitSec);
             gripRetryWaitSec = Mathf.Max(0f, gripRetryWaitSec);
             gripRetryCount = Mathf.Max(0, gripRetryCount);
             colorRetryWaitSec = Mathf.Max(0f, colorRetryWaitSec);
@@ -206,6 +200,8 @@ namespace CPS.ICPBL.Student
             {
                 robotId = robotController.RobotId;
             }
+
+            ConfigureColorSensingArea();
         }
 
         public void ConfigureServices(
@@ -231,12 +227,6 @@ namespace CPS.ICPBL.Student
             lockManagerComponent = lockManager as MonoBehaviour;
             pathPlannerComponent = pathPlanner as MonoBehaviour;
             telemetryLoggerComponent = telemetryLogger as MonoBehaviour;
-        }
-
-        public void ConfigureEnvironmentInfo(IEnvironmentInfo info)
-        {
-            environmentInfo = info;
-            environmentInfoComponent = info as MonoBehaviour;
         }
 
         public void StartMission(MissionRequest request, Action<MissionResult> onFinished)
@@ -392,7 +382,6 @@ namespace CPS.ICPBL.Student
             return new MissionExecutor.Dependencies
             {
                 Controller = robotController,
-                EnvironmentInfo = environmentInfo,
                 Gripper = new GripperAdapter(suctionGripper),
                 ColorSensor = colorSensor,
                 ColorArea = colorArea,
@@ -418,7 +407,6 @@ namespace CPS.ICPBL.Student
                 MoveTimeoutSec = moveTimeoutSec,
                 LockTimeoutSec = lockTimeoutSec,
                 GripReadyTimeoutSec = gripReadyTimeoutSec,
-                ConveyorQueueWaitSec = conveyorQueueWaitSec,
                 GripRetryWaitSec = gripRetryWaitSec,
                 GripRetryCount = gripRetryCount,
                 ColorRetryWaitSec = colorRetryWaitSec,
@@ -437,11 +425,6 @@ namespace CPS.ICPBL.Student
             if (poseProvider == null)
             {
                 poseProvider = ResolveInterface<IPoseProvider>(poseProviderComponent);
-            }
-
-            if (environmentInfo == null)
-            {
-                environmentInfo = ResolveInterface<IEnvironmentInfo>(environmentInfoComponent);
             }
 
             if (palletizer == null)
@@ -473,6 +456,28 @@ namespace CPS.ICPBL.Student
             {
                 robotId = robotController.RobotId;
             }
+
+            ConfigureColorSensingArea();
+        }
+
+        private void ConfigureColorSensingArea()
+        {
+            ConfigureColorArea(colorArea);
+
+            if (colorSensor != null)
+            {
+                ConfigureColorArea(colorSensor.area);
+            }
+        }
+
+        private static void ConfigureColorArea(global::ColorArea area)
+        {
+            if (area == null)
+            {
+                return;
+            }
+
+            area.ignoreSameRoot = false;
         }
 
         private void SetState(RobotRuntimeState nextState)

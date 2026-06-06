@@ -13,6 +13,11 @@ namespace CPS.ICPBL.Student
         void StartMission(MissionRequest request, Action<MissionResult> onFinished);
     }
 
+    public interface IRobotStationTracker
+    {
+        int CurrentStationId { get; }
+    }
+
     public interface ITaskAllocator
     {
         WorkTask SelectBestTask(

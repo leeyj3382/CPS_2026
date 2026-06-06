@@ -21,14 +21,9 @@ namespace CPS.ICPBL.Student
         [SerializeField, Min(0.05f)] private float pollingIntervalSec = 0.25f;
         [SerializeField, Min(0)] private int maxRetryCount = 1;
         [SerializeField] private bool runAutomatically = true;
-        [SerializeField] private bool enableDistanceTieBreaker;
+        [SerializeField] private bool enableTravelCost = true;
         [SerializeField] private bool logEventsWithoutTelemetry = true;
         [SerializeField, Min(0f)] private float postPickConveyorCooldownSec = 0f;
-
-        [Header("Predictive Scheduling")]
-        [SerializeField] private bool enableAnticipatedConveyorTasks = true;
-        [SerializeField, Min(0f)] private float anticipatedTaskLookaheadSec = 4f;
-        [SerializeField, Min(0f)] private float anticipatedTaskGraceSec = 4f;
 
         private readonly HashSet<int> reservedConveyorIds = new HashSet<int>();
         private readonly Dictionary<int, float> lastAssignedAtByConveyor =
@@ -85,8 +80,6 @@ namespace CPS.ICPBL.Student
             pollingIntervalSec = Mathf.Max(0.05f, pollingIntervalSec);
             maxRetryCount = Mathf.Max(0, maxRetryCount);
             postPickConveyorCooldownSec = Mathf.Max(0f, postPickConveyorCooldownSec);
-            anticipatedTaskLookaheadSec = Mathf.Max(0f, anticipatedTaskLookaheadSec);
-            anticipatedTaskGraceSec = Mathf.Max(0f, anticipatedTaskGraceSec);
         }
 
         /// <summary>
@@ -113,8 +106,7 @@ namespace CPS.ICPBL.Student
             operatingStations = stationData;
             telemetryLogger = logger;
             environmentScanner = new EnvironmentScanner(environmentInfo);
-            taskAllocator = new TaskAllocator(
-                enableDistanceTieBreaker ? operatingStations : null);
+            taskAllocator = new TaskAllocator(enableTravelCost ? operatingStations : null);
             nextPollingAt = 0f;
         }
 
@@ -189,7 +181,6 @@ namespace CPS.ICPBL.Student
 
         private void RefreshPendingTasks(ConveyorSnapshot[] snapshots)
         {
-            bool hasVisibleQueue = HasVisibleQueue(snapshots);
             for (int i = 0; i < snapshots.Length; i++)
             {
                 ConveyorSnapshot snapshot = snapshots[i];
@@ -200,19 +191,9 @@ namespace CPS.ICPBL.Student
 
                 if (snapshot.queueLength <= 0)
                 {
-                    if (CanCreateAnticipatedTask(snapshot, hasVisibleQueue))
-                    {
-                        CreateTask(snapshot, true);
-                    }
-                    else
-                    {
-                        CancelEmptyPendingTask(snapshot.conveyorId);
-                    }
-
+                    CancelEmptyPendingTask(snapshot.conveyorId);
                     continue;
                 }
-
-                MarkTaskAvailableIfAnticipated(snapshot.conveyorId);
 
                 if (!IsConveyorSchedulingAvailable(snapshot.conveyorId))
                 {
@@ -224,75 +205,18 @@ namespace CPS.ICPBL.Student
                     continue;
                 }
 
-                CreateTask(snapshot, false);
-            }
-        }
-
-        private bool HasVisibleQueue(ConveyorSnapshot[] snapshots)
-        {
-            for (int i = 0; i < snapshots.Length; i++)
-            {
-                ConveyorSnapshot snapshot = snapshots[i];
-                if (snapshot != null && snapshot.queueLength > 0)
+                WorkTask task = new WorkTask
                 {
-                    return true;
-                }
+                    taskId = nextTaskId++,
+                    conveyorId = snapshot.conveyorId,
+                    createdAt = environmentInfo.CurrentTime,
+                    status = TaskStatus.Pending
+                };
+
+                tasks.Add(task);
+                activeTaskByConveyor[task.conveyorId] = task;
+                LogTaskCreated(task);
             }
-
-            return false;
-        }
-
-        private bool CanCreateAnticipatedTask(
-            ConveyorSnapshot snapshot,
-            bool hasVisibleQueue)
-        {
-            if (!enableAnticipatedConveyorTasks
-                || !hasVisibleQueue
-                || snapshot == null
-                || snapshot.queueLength > 0
-                || snapshot.isReserved
-                || HasActiveTask(snapshot.conveyorId)
-                || !IsConveyorSchedulingAvailable(snapshot.conveyorId))
-            {
-                return false;
-            }
-
-            float timeUntilNextProduction = snapshot.nextProductionAt - environmentInfo.CurrentTime;
-            return timeUntilNextProduction >= 0f
-                && timeUntilNextProduction <= anticipatedTaskLookaheadSec;
-        }
-
-        private WorkTask CreateTask(ConveyorSnapshot snapshot, bool anticipated)
-        {
-            WorkTask task = new WorkTask
-            {
-                taskId = nextTaskId++,
-                conveyorId = snapshot.conveyorId,
-                createdAt = environmentInfo.CurrentTime,
-                anticipated = anticipated,
-                expectedAvailableAt = anticipated
-                    ? snapshot.nextProductionAt
-                    : environmentInfo.CurrentTime,
-                status = TaskStatus.Pending
-            };
-
-            tasks.Add(task);
-            activeTaskByConveyor[task.conveyorId] = task;
-            LogTaskCreated(task);
-            return task;
-        }
-
-        private void MarkTaskAvailableIfAnticipated(int conveyorId)
-        {
-            if (!activeTaskByConveyor.TryGetValue(conveyorId, out WorkTask task)
-                || task == null
-                || !task.anticipated)
-            {
-                return;
-            }
-
-            task.anticipated = false;
-            task.expectedAvailableAt = environmentInfo.CurrentTime;
         }
 
         private bool HasActiveTask(int conveyorId)
@@ -336,12 +260,6 @@ namespace CPS.ICPBL.Student
                 return;
             }
 
-            if (task.anticipated
-                && environmentInfo.CurrentTime <= task.expectedAvailableAt + anticipatedTaskGraceSec)
-            {
-                return;
-            }
-
             task.status = TaskStatus.Cancelled;
             activeTaskByConveyor.Remove(conveyorId);
             LogMessage("Scheduling", string.Format(
@@ -352,9 +270,37 @@ namespace CPS.ICPBL.Student
 
         private void DispatchAvailableRobots(ConveyorSnapshot[] snapshots)
         {
+            var availableRobots = new List<IRobotAgent>(robotAgents.Count);
             for (int i = 0; i < robotAgents.Count; i++)
             {
                 IRobotAgent robotAgent = robotAgents[i];
+                if (CanDispatch(robotAgent))
+                {
+                    availableRobots.Add(robotAgent);
+                }
+            }
+
+            if (availableRobots.Count == 0)
+            {
+                return;
+            }
+
+            if (availableRobots.Count > 1)
+            {
+                DispatchAvailableRobotsPass(snapshots, availableRobots, false);
+            }
+
+            DispatchAvailableRobotsPass(snapshots, availableRobots, true);
+        }
+
+        private void DispatchAvailableRobotsPass(
+            ConveyorSnapshot[] snapshots,
+            List<IRobotAgent> availableRobots,
+            bool allowWorkStealing)
+        {
+            for (int i = 0; i < availableRobots.Count; i++)
+            {
+                IRobotAgent robotAgent = availableRobots[i];
                 if (!CanDispatch(robotAgent))
                 {
                     continue;
@@ -370,7 +316,8 @@ namespace CPS.ICPBL.Student
                 WorkTask selectedTask = taskAllocator.SelectBestTask(
                     snapshots,
                     robotSnapshot,
-                    pendingTasks);
+                    pendingTasks,
+                    allowWorkStealing);
 
                 if (selectedTask == null)
                 {
@@ -420,6 +367,11 @@ namespace CPS.ICPBL.Student
             snapshot.state = robotAgent.State;
             snapshot.currentTaskId =
                 inFlightTask != null ? inFlightTask.taskId : StudentConstants.NoTaskId;
+            if (robotAgent is IRobotStationTracker stationTracker)
+            {
+                snapshot.currentStationId = stationTracker.CurrentStationId;
+            }
+
             return snapshot;
         }
 
