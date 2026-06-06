@@ -21,8 +21,8 @@ namespace CPS.ICPBL.Student
 
         [Header("Robot Home Conveyor Ranges")]
         [SerializeField] private int robotAMinConveyor = 1;
-        [SerializeField] private int robotAMaxConveyor = 5;
-        [SerializeField] private int robotBMinConveyor = 6;
+        [SerializeField] private int robotAMaxConveyor = 3;
+        [SerializeField] private int robotBMinConveyor = 4;
         [SerializeField] private int robotBMaxConveyor = 10;
 
         [Header("Central Zone Policy")]

@@ -8,7 +8,7 @@ using UnityEngine;
 namespace CPS.ICPBL.Student
 {
     [DisallowMultipleComponent]
-    public sealed class RobotAgent : MonoBehaviour, IRobotAgent, IRobotStationTracker
+    public sealed class RobotAgent : MonoBehaviour, IRobotAgent, IRobotStationTracker, IRobotPrepositioner
     {
         [Header("Robot References")]
         [SerializeField] private int robotId = StudentConstants.RobotAId;
@@ -54,6 +54,7 @@ namespace CPS.ICPBL.Student
         private IPathPlanner pathPlanner;
         private ITelemetryLogger telemetryLogger;
         private Coroutine activeMission;
+        private Coroutine activePreposition;
         private int currentStationId = StudentConstants.NoStationId;
         private bool waitingForPayloadRecovery;
 
@@ -69,6 +70,7 @@ namespace CPS.ICPBL.Student
             get
             {
                 return activeMission == null
+                    && activePreposition == null
                     && State == RobotRuntimeState.Idle
                     && !HasHeldPayload();
             }
@@ -231,20 +233,59 @@ namespace CPS.ICPBL.Student
 
         public void StartMission(MissionRequest request, Action<MissionResult> onFinished)
         {
-            if (activeMission != null || State != RobotRuntimeState.Idle || HasHeldPayload())
+            if (activeMission != null
+                || activePreposition != null
+                || State != RobotRuntimeState.Idle
+                || HasHeldPayload())
             {
+                string busyMessage = "RobotAgent is already running a mission.";
+                if (HasHeldPayload())
+                {
+                    busyMessage = "RobotAgent is holding an unresolved payload.";
+                }
+                else if (activePreposition != null)
+                {
+                    busyMessage = "RobotAgent is moving to an initial waiting station.";
+                }
+
                 MissionResult busyResult = CreateImmediateFailure(
                     request,
                     MissionFailureReason.Unknown,
-                    HasHeldPayload()
-                        ? "RobotAgent is holding an unresolved payload."
-                        : "RobotAgent is already running a mission.");
+                    busyMessage);
                 InvokeFinishedSafely(onFinished, busyResult);
                 return;
             }
 
             ResolveSerializedReferences();
             activeMission = StartCoroutine(RunMission(request, onFinished));
+        }
+
+        public bool TryPrepositionToStation(int stationId)
+        {
+            if (!StudentConstants.IsConveyorId(stationId))
+            {
+                return false;
+            }
+
+            if (currentStationId == stationId && CanAcceptTask)
+            {
+                return true;
+            }
+
+            if (!CanAcceptTask)
+            {
+                return false;
+            }
+
+            ResolveSerializedReferences();
+            if (robotController == null)
+            {
+                LogWarning("Initial pre-position ignored because IRobotController is missing.");
+                return false;
+            }
+
+            activePreposition = StartCoroutine(RunPreposition(stationId));
+            return true;
         }
 
         [ContextMenu("RobotAgent/Start Debug Mission")]
@@ -344,6 +385,32 @@ namespace CPS.ICPBL.Student
             waitingForPayloadRecovery = false;
             SetState(RobotRuntimeState.Idle);
             InvokeFinishedSafely(onFinished, result);
+        }
+
+        private IEnumerator RunPreposition(int stationId)
+        {
+            SetState(RobotRuntimeState.MovingToConveyor);
+            robotController.GoToOperatingStation(stationId);
+
+            float deadline = Time.time + Mathf.Max(0f, moveTimeoutSec);
+            while (robotController.IsBusy)
+            {
+                if (Time.time > deadline)
+                {
+                    SetState(RobotRuntimeState.Stuck);
+                    LogWarning(string.Format(
+                        "Initial pre-position timed out while moving to station={0}.",
+                        stationId));
+                    activePreposition = null;
+                    yield break;
+                }
+
+                yield return null;
+            }
+
+            currentStationId = stationId;
+            activePreposition = null;
+            SetState(RobotRuntimeState.Idle);
         }
 
         private void InvokeFinishedSafely(
