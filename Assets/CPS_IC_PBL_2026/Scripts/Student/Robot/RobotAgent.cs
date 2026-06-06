@@ -200,6 +200,8 @@ namespace CPS.ICPBL.Student
             {
                 robotId = robotController.RobotId;
             }
+
+            ConfigureColorSensingArea();
         }
 
         public void ConfigureServices(
@@ -454,6 +456,28 @@ namespace CPS.ICPBL.Student
             {
                 robotId = robotController.RobotId;
             }
+
+            ConfigureColorSensingArea();
+        }
+
+        private void ConfigureColorSensingArea()
+        {
+            ConfigureColorArea(colorArea);
+
+            if (colorSensor != null)
+            {
+                ConfigureColorArea(colorSensor.area);
+            }
+        }
+
+        private static void ConfigureColorArea(global::ColorArea area)
+        {
+            if (area == null)
+            {
+                return;
+            }
+
+            area.ignoreSameRoot = false;
         }
 
         private void SetState(RobotRuntimeState nextState)

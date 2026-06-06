@@ -1154,36 +1154,6 @@ namespace CPS.ICPBL.Student
 
         private Color ReadSensedColor(out string source)
         {
-            if (dependencies.Gripper != null && dependencies.Gripper.IsHolding)
-            {
-                if (dependencies.Gripper.TryReadHeldObjectColor(out Color heldColor, out source))
-                {
-                    return heldColor;
-                }
-
-                string heldColorFailure = source;
-                if (dependencies.ColorSensor != null && dependencies.ColorSensor.area != null)
-                {
-                    source = string.Format(
-                        "{0}; fallback=ColorSensor.area:{1}",
-                        heldColorFailure,
-                        dependencies.ColorSensor.area.name);
-                    return dependencies.ColorSensor.area.color;
-                }
-
-                if (dependencies.ColorArea != null)
-                {
-                    source = string.Format(
-                        "{0}; fallback=ColorArea:{1}",
-                        heldColorFailure,
-                        dependencies.ColorArea.name);
-                    return dependencies.ColorArea.color;
-                }
-
-                source = heldColorFailure;
-                return StudentConstants.DefaultSensorColor;
-            }
-
             if (dependencies.ColorSensor != null && dependencies.ColorSensor.area != null)
             {
                 source = string.Format("ColorSensor.area:{0}", dependencies.ColorSensor.area.name);
