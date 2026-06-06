@@ -102,44 +102,36 @@ namespace CPS.ICPBL.Student
                 return false;
             }
 
+            NormalizeHeldObjectForColorSensor();
             reason = string.Empty;
             LastFailureReason = string.Empty;
             return true;
         }
 
-        public bool TryReadHeldObjectColor(out Color color, out string source)
+        private void NormalizeHeldObjectForColorSensor()
         {
-            color = default;
-            source = string.Empty;
-
-            if (gripper == null)
-            {
-                source = "SuctionGripper reference is missing.";
-                return false;
-            }
-
             PickableObject heldObject = gripper.HeldObject;
-            if (heldObject == null)
+            if (heldObject == null || heldObject.gameObject == null)
             {
-                source = "No held object.";
-                return false;
+                return;
             }
 
-            Renderer renderer = heldObject.GetComponentInChildren<Renderer>();
-            if (renderer == null)
+            GameObject root = heldObject.gameObject;
+            if (root.tag != "Product" || root.GetComponent<Renderer>() != null)
             {
-                source = string.Format("Held object {0} has no renderer.", heldObject.name);
-                return false;
+                return;
             }
 
-            if (!TryReadMaterialColor(renderer, out color))
+            foreach (Renderer childRenderer in root.GetComponentsInChildren<Renderer>(true))
             {
-                source = string.Format("Held object {0} renderer has no readable color.", heldObject.name);
-                return false;
+                if (childRenderer != null
+                    && childRenderer.gameObject != root
+                    && childRenderer.gameObject.tag == "Product")
+                {
+                    root.tag = "Untagged";
+                    return;
+                }
             }
-
-            source = string.Format("HeldObject:{0}/{1}", heldObject.name, renderer.name);
-            return true;
         }
 
         public void Release()
@@ -151,35 +143,6 @@ namespace CPS.ICPBL.Student
             }
 
             gripper.Release();
-        }
-
-        private static bool TryReadMaterialColor(Renderer renderer, out Color color)
-        {
-            color = default;
-            if (renderer == null)
-            {
-                return false;
-            }
-
-            Material material = renderer.material;
-            if (material == null)
-            {
-                return false;
-            }
-
-            if (material.HasProperty("_BaseColor"))
-            {
-                color = material.GetColor("_BaseColor");
-                return true;
-            }
-
-            if (material.HasProperty("_Color"))
-            {
-                color = material.color;
-                return true;
-            }
-
-            return false;
         }
     }
 }

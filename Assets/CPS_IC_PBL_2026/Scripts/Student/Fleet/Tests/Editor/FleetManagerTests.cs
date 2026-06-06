@@ -40,7 +40,7 @@ namespace CPS.ICPBL.Student.Tests
         }
 
         [Test]
-        public void RunSchedulingCycle_DispatchesFullQueueBeforeNonFullQueue()
+        public void RunSchedulingCycle_DispatchesSoonerOverflowBeforeSparseQueue()
         {
             var robot = new FakeRobotAgent(StudentConstants.RobotAId);
             environment.SetQueueLength(1, 1);
@@ -55,7 +55,21 @@ namespace CPS.ICPBL.Student.Tests
         }
 
         [Test]
-        public void RunSchedulingCycle_DispatchesEarlierSaturationBeforePriorityQueue()
+        public void RunSchedulingCycle_PrioritizesEarlierOverflowOverFullSlowQueue()
+        {
+            var robot = new FakeRobotAgent(StudentConstants.RobotAId);
+            environment.SetQueueLength(1, 2);
+            environment.SetQueueLength(10, StudentConstants.ConveyorQueueCapacity);
+            fleetManager.ConfigureRobotAgents(robot, null);
+
+            fleetManager.RunSchedulingCycle();
+
+            Assert.That(robot.DispatchCount, Is.EqualTo(1));
+            Assert.That(robot.LastRequest.conveyorId, Is.EqualTo(1));
+        }
+
+        [Test]
+        public void RunSchedulingCycle_DispatchesEarlierOverflowBeforeLargerQueue()
         {
             var robot = new FakeRobotAgent(StudentConstants.RobotAId);
             environment.SetQueueLength(4, 1);
@@ -69,12 +83,26 @@ namespace CPS.ICPBL.Student.Tests
         }
 
         [Test]
-        public void RunSchedulingCycle_RobotAPrefersConveyorsOneToFiveAfterPriorityQueues()
+        public void RunSchedulingCycle_RobotAPrefersConveyorsOneToThreeWhenOverflowIsTied()
         {
             var robot = new FakeRobotAgent(StudentConstants.RobotAId);
+            environment.SetQueueLength(3, 1);
             environment.SetQueueLength(4, 1);
-            environment.SetQueueLength(8, 1);
             fleetManager.ConfigureRobotAgents(robot, null);
+
+            fleetManager.RunSchedulingCycle();
+
+            Assert.That(robot.DispatchCount, Is.EqualTo(1));
+            Assert.That(robot.LastRequest.conveyorId, Is.EqualTo(3));
+        }
+
+        [Test]
+        public void RunSchedulingCycle_RobotBPrefersConveyorsFourToTenWhenOverflowIsTied()
+        {
+            var robot = new FakeRobotAgent(StudentConstants.RobotBId);
+            environment.SetQueueLength(3, 1);
+            environment.SetQueueLength(4, 1);
+            fleetManager.ConfigureRobotAgents(null, robot);
 
             fleetManager.RunSchedulingCycle();
 
@@ -83,7 +111,7 @@ namespace CPS.ICPBL.Student.Tests
         }
 
         [Test]
-        public void RunSchedulingCycle_RobotBDispatchesFullQueueBeforeRobotRange()
+        public void RunSchedulingCycle_RobotBWorkStealsCriticalFrontConveyor()
         {
             var robot = new FakeRobotAgent(StudentConstants.RobotBId);
             environment.SetQueueLength(2, StudentConstants.ConveyorQueueCapacity);
@@ -113,43 +141,34 @@ namespace CPS.ICPBL.Student.Tests
         }
 
         [Test]
-        public void RunSchedulingCycle_AnticipatesConveyorTwoWhenConveyorOneAppears()
+        public void RunSchedulingCycle_DoesNotStealOtherRobotAreaWhenOwnerIsIdle()
         {
             var robotA = new FakeRobotAgent(StudentConstants.RobotAId);
             var robotB = new FakeRobotAgent(StudentConstants.RobotBId);
-            environment.CurrentTime = 15f;
-            environment.SetQueueLength(1, 1);
+            environment.SetQueueLength(6, 1);
             fleetManager.ConfigureRobotAgents(robotA, robotB);
 
             fleetManager.RunSchedulingCycle();
 
-            Assert.That(robotA.DispatchCount, Is.EqualTo(1));
-            Assert.That(robotA.LastRequest.conveyorId, Is.EqualTo(1));
+            Assert.That(robotA.DispatchCount, Is.Zero);
             Assert.That(robotB.DispatchCount, Is.EqualTo(1));
-            Assert.That(robotB.LastRequest.conveyorId, Is.EqualTo(2));
-            Assert.That(fleetManager.Tasks, Has.Count.EqualTo(2));
-            Assert.That(fleetManager.Tasks[1].anticipated, Is.True);
-            Assert.That(fleetManager.Tasks[1].expectedAvailableAt, Is.EqualTo(18f).Within(0.001f));
+            Assert.That(robotB.LastRequest.conveyorId, Is.EqualTo(6));
         }
 
         [Test]
-        public void RunSchedulingCycle_FirstWaveDispatchesConveyorsOneAndTwoBeforeThreeAndFour()
+        public void RunSchedulingCycle_WorkStealsWhenOwnerCannotAcceptTask()
         {
             var robotA = new FakeRobotAgent(StudentConstants.RobotAId);
             var robotB = new FakeRobotAgent(StudentConstants.RobotBId);
-            environment.CurrentTime = 20f;
-            environment.SetQueueLength(1, 1);
-            environment.SetQueueLength(2, 1);
-            environment.SetQueueLength(3, 1);
-            environment.SetQueueLength(4, 1);
+            robotB.SetAvailable(false);
+            environment.SetQueueLength(6, 1);
             fleetManager.ConfigureRobotAgents(robotA, robotB);
 
             fleetManager.RunSchedulingCycle();
 
             Assert.That(robotA.DispatchCount, Is.EqualTo(1));
-            Assert.That(robotA.LastRequest.conveyorId, Is.EqualTo(1));
-            Assert.That(robotB.DispatchCount, Is.EqualTo(1));
-            Assert.That(robotB.LastRequest.conveyorId, Is.EqualTo(2));
+            Assert.That(robotA.LastRequest.conveyorId, Is.EqualTo(6));
+            Assert.That(robotB.DispatchCount, Is.Zero);
         }
 
         [Test]
@@ -266,6 +285,12 @@ namespace CPS.ICPBL.Student.Tests
             public bool CanAcceptTask { get; private set; } = true;
             public MissionRequest LastRequest { get; private set; }
             public int DispatchCount { get; private set; }
+
+            public void SetAvailable(bool canAcceptTask)
+            {
+                CanAcceptTask = canAcceptTask;
+                State = canAcceptTask ? RobotRuntimeState.Idle : RobotRuntimeState.MovingToConveyor;
+            }
 
             public void StartMission(MissionRequest request, Action<MissionResult> callback)
             {

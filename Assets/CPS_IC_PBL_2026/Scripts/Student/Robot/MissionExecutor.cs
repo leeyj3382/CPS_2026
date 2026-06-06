@@ -12,7 +12,6 @@ namespace CPS.ICPBL.Student
         public sealed class Dependencies
         {
             public IRobotController Controller;
-            public IEnvironmentInfo EnvironmentInfo;
             public GripperAdapter Gripper;
             public global::ColorSensor ColorSensor;
             public global::ColorArea ColorArea;
@@ -35,7 +34,6 @@ namespace CPS.ICPBL.Student
             public float MoveTimeoutSec = StudentConstants.DefaultMoveTimeoutSec;
             public float LockTimeoutSec = StudentConstants.DefaultLockTimeoutSec;
             public float GripReadyTimeoutSec = StudentConstants.DefaultGripReadyTimeoutSec;
-            public float ConveyorQueueWaitSec = 6f;
             public float GripRetryWaitSec = 0.2f;
             public int GripRetryCount = 1;
             public float ColorRetryWaitSec = 0.1f;
@@ -136,11 +134,6 @@ namespace CPS.ICPBL.Student
                     conveyorKey,
                     MissionFailureReason.CollisionRisk,
                     "conveyor lock");
-            }
-
-            if (!context.Failed)
-            {
-                yield return WaitForConveyorItem(context);
             }
 
             if (!context.Failed)
@@ -499,7 +492,7 @@ namespace CPS.ICPBL.Student
                         {
                             movingDeadline = Time.time + Mathf.Max(0f, settings.MoveTimeoutSec);
                             RegisterActiveBasePath(context, targetPosition);
-                            RestartBaseMove(stationId, targetPosition);
+                            dependencies.Controller.GoToOperatingStation(stationId);
                             nextCheckAt = Time.time + Mathf.Max(0.01f, settings.BasePathCheckIntervalSec);
                             continue;
                         }
@@ -572,7 +565,7 @@ namespace CPS.ICPBL.Student
 
                     movingDeadline = Time.time + Mathf.Max(0f, settings.MoveTimeoutSec);
                     RegisterActiveBasePath(context, targetPosition);
-                    RestartBaseMove(stationId, targetPosition);
+                    dependencies.Controller.GoToOperatingStation(stationId);
                     nextCheckAt = Time.time + Mathf.Max(0.01f, settings.BasePathCheckIntervalSec);
                     continue;
                 }
@@ -918,18 +911,6 @@ namespace CPS.ICPBL.Student
             onArrived?.Invoke(true);
         }
 
-        private void RestartBaseMove(int stationId, Vector3 targetPosition)
-        {
-            if (StudentConstants.IsConveyorId(stationId)
-                || StudentConstants.IsBoxStationId(stationId))
-            {
-                dependencies.Controller.GoToOperatingStation(stationId);
-                return;
-            }
-
-            dependencies.Controller.MoveBaseTo(targetPosition);
-        }
-
         private Vector3[] BuildYieldCandidates(
             MissionContext context,
             Vector3 from,
@@ -970,11 +951,6 @@ namespace CPS.ICPBL.Student
         }
 
         private static Vector3 ClampYieldCandidate(Vector3 value)
-        {
-            return ClampWorldPosition(value);
-        }
-
-        private static Vector3 ClampWorldPosition(Vector3 value)
         {
             value.x = Mathf.Clamp(value.x, -9.5f, 10.5f);
             value.z = Mathf.Clamp(value.z, -8.0f, 11.5f);
@@ -1020,13 +996,10 @@ namespace CPS.ICPBL.Student
             }
 
             dependencies.SetState?.Invoke(RobotRuntimeState.Picking);
-            if (!IsSamePosition(pose.approachPos, pose.actionPos))
+            yield return MoveArmTo(context, pose.approachPos, pose.armMoveDuration, "pick approach");
+            if (context.Failed)
             {
-                yield return MoveArmTo(context, pose.approachPos, pose.armMoveDuration, "pick approach");
-                if (context.Failed)
-                {
-                    yield break;
-                }
+                yield break;
             }
 
             yield return MoveArmTo(context, pose.actionPos, pose.armMoveDuration, "pick action");
@@ -1042,36 +1015,8 @@ namespace CPS.ICPBL.Student
             }
 
             dependencies.SetState?.Invoke(RobotRuntimeState.Retracting);
-            if (!IsSamePosition(pose.actionPos, pose.retractPos))
-            {
-                yield return MoveArmTo(context, pose.retractPos, pose.armMoveDuration, "pick retract");
-            }
-
+            yield return MoveArmTo(context, pose.retractPos, pose.armMoveDuration, "pick retract");
             ReleaseKey(context, armKey);
-        }
-
-        private IEnumerator WaitForConveyorItem(MissionContext context)
-        {
-            if (dependencies.EnvironmentInfo == null)
-            {
-                yield break;
-            }
-
-            dependencies.SetState?.Invoke(RobotRuntimeState.Picking);
-            float deadline = Time.time + Mathf.Max(0f, settings.ConveyorQueueWaitSec);
-            while (Time.time <= deadline)
-            {
-                if (dependencies.EnvironmentInfo.GetQueueLength(context.Request.conveyorId) > 0)
-                {
-                    yield break;
-                }
-
-                yield return null;
-            }
-
-            Fail(context, MissionFailureReason.QueueEmpty, string.Format(
-                "Timed out waiting for conveyor={0} item before pick.",
-                context.Request.conveyorId));
         }
 
         private void ReportConveyorPicked(MissionContext context)
@@ -1209,36 +1154,6 @@ namespace CPS.ICPBL.Student
 
         private Color ReadSensedColor(out string source)
         {
-            if (dependencies.Gripper != null && dependencies.Gripper.IsHolding)
-            {
-                if (dependencies.Gripper.TryReadHeldObjectColor(out Color heldColor, out source))
-                {
-                    return heldColor;
-                }
-
-                string heldColorFailure = source;
-                if (dependencies.ColorSensor != null && dependencies.ColorSensor.area != null)
-                {
-                    source = string.Format(
-                        "{0}; fallback=ColorSensor.area:{1}",
-                        heldColorFailure,
-                        dependencies.ColorSensor.area.name);
-                    return dependencies.ColorSensor.area.color;
-                }
-
-                if (dependencies.ColorArea != null)
-                {
-                    source = string.Format(
-                        "{0}; fallback=ColorArea:{1}",
-                        heldColorFailure,
-                        dependencies.ColorArea.name);
-                    return dependencies.ColorArea.color;
-                }
-
-                source = heldColorFailure;
-                return StudentConstants.DefaultSensorColor;
-            }
-
             if (dependencies.ColorSensor != null && dependencies.ColorSensor.area != null)
             {
                 source = string.Format("ColorSensor.area:{0}", dependencies.ColorSensor.area.name);
@@ -1339,11 +1254,6 @@ namespace CPS.ICPBL.Student
                 Quaternion.identity,
                 Mathf.Max(0.01f, durationSec));
             yield return WaitForControllerIdle(context, settings.MoveTimeoutSec, label);
-        }
-
-        private static bool IsSamePosition(Vector3 left, Vector3 right)
-        {
-            return Vector3.SqrMagnitude(left - right) <= 0.0001f;
         }
 
         private IEnumerator WaitForControllerIdle(
