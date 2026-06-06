@@ -18,6 +18,11 @@ namespace CPS.ICPBL.Student
         int CurrentStationId { get; }
     }
 
+    public interface IRobotPrepositioner
+    {
+        bool TryPrepositionToStation(int stationId);
+    }
+
     public interface ITaskAllocator
     {
         WorkTask SelectBestTask(

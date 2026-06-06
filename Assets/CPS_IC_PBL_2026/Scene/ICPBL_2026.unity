@@ -8325,6 +8325,9 @@ MonoBehaviour:
   enableDistanceTieBreaker: 0
   logEventsWithoutTelemetry: 1
   postPickConveyorCooldownSec: 0
+  enableInitialPrepositioning: 1
+  robotAInitialConveyorId: 1
+  robotBInitialConveyorId: 4
 --- !u!114 &2140976385
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -8374,8 +8377,8 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   robotAMinConveyor: 1
-  robotAMaxConveyor: 5
-  robotBMinConveyor: 6
+  robotAMaxConveyor: 3
+  robotBMinConveyor: 4
   robotBMaxConveyor: 10
   requireCentralZoneForUnknownStation: 1
   requireCentralZoneForCrossSideMove: 1
@@ -8500,24 +8503,24 @@ MonoBehaviour:
   conveyorApproachOffset: {x: 0, y: 0.25, z: 0}
   conveyorActionOffset: {x: 0, y: -0.35, z: 0}
   conveyorRetractOffset: {x: 0, y: 0.35, z: 0}
-  conveyorArmMoveDuration: 1
+  conveyorArmMoveDuration: 0.7
   boxApproachOffset: {x: 0, y: 0.55, z: 0}
   boxActionOffset: {x: 0, y: 0.2, z: 0}
   boxRetractOffset: {x: 0, y: 0.65, z: 0}
-  boxArmMoveDuration: 1
+  boxArmMoveDuration: 0.7
   conveyorPickOverrides: []
   normalBoxBaseOverride:
     stationId: 0
     approachPos: {x: 0, y: 0, z: 0}
     actionPos: {x: 0, y: 0, z: 0}
     retractPos: {x: 0, y: 0, z: 0}
-    armMoveDuration: 1
+    armMoveDuration: 0.7
   abnormalBoxBaseOverride:
     stationId: 0
     approachPos: {x: 0, y: 0, z: 0}
     actionPos: {x: 0, y: 0, z: 0}
     retractPos: {x: 0, y: 0, z: 0}
-    armMoveDuration: 1
+    armMoveDuration: 0.7
   drawGizmos: 1
   debugStationId: 1
   gizmoRadius: 0.08

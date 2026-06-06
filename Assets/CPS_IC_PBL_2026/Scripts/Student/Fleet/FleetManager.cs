@@ -25,6 +25,11 @@ namespace CPS.ICPBL.Student
         [SerializeField] private bool logEventsWithoutTelemetry = true;
         [SerializeField, Min(0f)] private float postPickConveyorCooldownSec = 0f;
 
+        [Header("Initial Pre-positioning")]
+        [SerializeField] private bool enableInitialPrepositioning = true;
+        [SerializeField] private int robotAInitialConveyorId = 1;
+        [SerializeField] private int robotBInitialConveyorId = 4;
+
         private readonly HashSet<int> reservedConveyorIds = new HashSet<int>();
         private readonly Dictionary<int, float> lastAssignedAtByConveyor =
             new Dictionary<int, float>();
@@ -34,6 +39,7 @@ namespace CPS.ICPBL.Student
             new Dictionary<int, WorkTask>();
         private readonly Dictionary<int, StudentRobotSnapshot> snapshotByRobot =
             new Dictionary<int, StudentRobotSnapshot>();
+        private readonly HashSet<int> completedInitialConveyorRobotIds = new HashSet<int>();
         private readonly List<IRobotAgent> robotAgents = new List<IRobotAgent>(2);
         private readonly List<WorkTask> tasks = new List<WorkTask>();
 
@@ -43,6 +49,7 @@ namespace CPS.ICPBL.Student
         private TaskAllocator taskAllocator;
         private float nextPollingAt;
         private int nextTaskId = 1;
+        private bool initialPrepositionRequested;
 
         public IReadOnlyList<WorkTask> Tasks => tasks;
         public IReadOnlyCollection<int> ReservedConveyorIds => reservedConveyorIds;
@@ -65,6 +72,8 @@ namespace CPS.ICPBL.Student
                 return;
             }
 
+            TryRequestInitialPrepositioning();
+
             float currentTime = environmentInfo.CurrentTime;
             if (currentTime < nextPollingAt)
             {
@@ -80,6 +89,14 @@ namespace CPS.ICPBL.Student
             pollingIntervalSec = Mathf.Max(0.05f, pollingIntervalSec);
             maxRetryCount = Mathf.Max(0, maxRetryCount);
             postPickConveyorCooldownSec = Mathf.Max(0f, postPickConveyorCooldownSec);
+            robotAInitialConveyorId = Mathf.Clamp(
+                robotAInitialConveyorId,
+                StudentConstants.MinConveyorId,
+                StudentConstants.MaxConveyorId);
+            robotBInitialConveyorId = Mathf.Clamp(
+                robotBInitialConveyorId,
+                StudentConstants.MinConveyorId,
+                StudentConstants.MaxConveyorId);
         }
 
         /// <summary>
@@ -115,6 +132,8 @@ namespace CPS.ICPBL.Student
             robotAgents.Clear();
             RegisterRobotAgent(robotA);
             RegisterRobotAgent(robotB);
+            initialPrepositionRequested = false;
+            completedInitialConveyorRobotIds.Clear();
         }
 
         public void RegisterRobotAgent(IRobotAgent robotAgent)
@@ -306,10 +325,10 @@ namespace CPS.ICPBL.Student
                     continue;
                 }
 
-                WorkTask[] pendingTasks = BuildPendingTaskArray();
+                WorkTask[] pendingTasks = BuildPendingTaskArray(robotAgent);
                 if (pendingTasks.Length == 0)
                 {
-                    return;
+                    continue;
                 }
 
                 StudentRobotSnapshot robotSnapshot = GetRobotSnapshot(robotAgent);
@@ -335,15 +354,22 @@ namespace CPS.ICPBL.Student
                 && FindInFlightTask(robotAgent.RobotId) == null;
         }
 
-        private WorkTask[] BuildPendingTaskArray()
+        private WorkTask[] BuildPendingTaskArray(IRobotAgent robotAgent)
         {
             var pendingTasks = new List<WorkTask>();
+            int requiredInitialConveyorId = GetRequiredInitialConveyorId(robotAgent);
             for (int i = 0; i < tasks.Count; i++)
             {
                 WorkTask task = tasks[i];
                 if (task.status == TaskStatus.Pending
                     && task.assignedRobotId == StudentConstants.UnassignedRobotId)
                 {
+                    if (StudentConstants.IsConveyorId(requiredInitialConveyorId)
+                        && task.conveyorId != requiredInitialConveyorId)
+                    {
+                        continue;
+                    }
+
                     pendingTasks.Add(task);
                 }
             }
@@ -373,6 +399,87 @@ namespace CPS.ICPBL.Student
             }
 
             return snapshot;
+        }
+
+        private void TryRequestInitialPrepositioning()
+        {
+            if (initialPrepositionRequested || !enableInitialPrepositioning)
+            {
+                return;
+            }
+
+            initialPrepositionRequested = true;
+            for (int i = 0; i < robotAgents.Count; i++)
+            {
+                IRobotAgent robotAgent = robotAgents[i];
+                IRobotPrepositioner prepositioner = robotAgent as IRobotPrepositioner;
+                if (prepositioner == null)
+                {
+                    continue;
+                }
+
+                int stationId = GetInitialPrepositionStation(robotAgent.RobotId);
+                if (!StudentConstants.IsConveyorId(stationId))
+                {
+                    continue;
+                }
+
+                if (prepositioner.TryPrepositionToStation(stationId))
+                {
+                    LogMessage("Preposition", string.Format(
+                        "Robot={0} moving to initial station={1}.",
+                        robotAgent.RobotId,
+                        stationId));
+                }
+            }
+        }
+
+        private int GetInitialPrepositionStation(int robotId)
+        {
+            if (robotId == StudentConstants.RobotAId)
+            {
+                return robotAInitialConveyorId;
+            }
+
+            if (robotId == StudentConstants.RobotBId)
+            {
+                return robotBInitialConveyorId;
+            }
+
+            return StudentConstants.NoStationId;
+        }
+
+        private int GetRequiredInitialConveyorId(IRobotAgent robotAgent)
+        {
+            if (!enableInitialPrepositioning
+                || !initialPrepositionRequested
+                || robotAgent == null
+                || completedInitialConveyorRobotIds.Contains(robotAgent.RobotId))
+            {
+                return StudentConstants.NoStationId;
+            }
+
+            return GetInitialPrepositionStation(robotAgent.RobotId);
+        }
+
+        private bool IsInitialConveyorTask(WorkTask task)
+        {
+            if (task == null || !StudentConstants.IsRobotId(task.assignedRobotId))
+            {
+                return false;
+            }
+
+            return task.conveyorId == GetInitialPrepositionStation(task.assignedRobotId);
+        }
+
+        private void MarkInitialConveyorCompleted(WorkTask task)
+        {
+            if (!enableInitialPrepositioning || !IsInitialConveyorTask(task))
+            {
+                return;
+            }
+
+            completedInitialConveyorRobotIds.Add(task.assignedRobotId);
         }
 
         private WorkTask FindInFlightTask(int robotId)
@@ -507,6 +614,7 @@ namespace CPS.ICPBL.Student
 
             if (result.success)
             {
+                MarkInitialConveyorCompleted(task);
                 task.status = TaskStatus.Completed;
                 RemoveActiveTaskIfMatches(task.conveyorId, task);
                 LogMessage("Scheduling", string.Format("Completed task={0}.", task.taskId));
@@ -515,6 +623,7 @@ namespace CPS.ICPBL.Student
 
             if (task.conveyorPicked)
             {
+                MarkInitialConveyorCompleted(task);
                 task.status = TaskStatus.Failed;
                 RemoveActiveTaskIfMatches(task.conveyorId, task);
                 LogMessage("Scheduling", string.Format(
