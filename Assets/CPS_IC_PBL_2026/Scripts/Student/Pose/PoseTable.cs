@@ -126,9 +126,9 @@ namespace CPS.ICPBL.Student
                 conveyorPickPoses[conveyorId] = new StationPose
                 {
                     stationId = conveyorId,
-                    approachPos = anchor + conveyorApproachOffset,
-                    actionPos = anchor + conveyorActionOffset,
-                    retractPos = anchor + conveyorRetractOffset,
+                    approachPos = ApplyVerticalOffset(anchor, conveyorApproachOffset),
+                    actionPos = ApplyVerticalOffset(anchor, conveyorActionOffset),
+                    retractPos = ApplyVerticalOffset(anchor, conveyorRetractOffset),
                     armMoveDuration = Mathf.Max(MinArmMoveDuration, conveyorArmMoveDuration)
                 };
             }
@@ -146,11 +146,16 @@ namespace CPS.ICPBL.Student
             return new StationPose
             {
                 stationId = stationId,
-                approachPos = anchor + boxApproachOffset,
-                actionPos = anchor + boxActionOffset,
-                retractPos = anchor + boxRetractOffset,
+                approachPos = ApplyVerticalOffset(anchor, boxApproachOffset),
+                actionPos = ApplyVerticalOffset(anchor, boxActionOffset),
+                retractPos = ApplyVerticalOffset(anchor, boxRetractOffset),
                 armMoveDuration = Mathf.Max(MinArmMoveDuration, boxArmMoveDuration)
             };
+        }
+
+        private static Vector3 ApplyVerticalOffset(Vector3 basePos, Vector3 offset)
+        {
+            return new Vector3(basePos.x, basePos.y + offset.y, basePos.z);
         }
 
         private Vector3 GetArmAnchorPoint(int stationId)

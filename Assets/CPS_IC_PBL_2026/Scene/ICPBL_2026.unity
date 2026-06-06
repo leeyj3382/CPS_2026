@@ -8467,17 +8467,17 @@ MonoBehaviour:
   normalBoxTrigger: {fileID: 242586149}
   abnormalBoxTrigger: {fileID: 196160528}
   registerBoxTriggerOnCommit: 1
-  columns: 6
+  columns: 5
   rows: 4
   normalSlotCount: 52
   abnormalSlotCount: 12
-  slotSpacing: {x: 0.32, y: 0, z: 0.32}
-  layerHeight: 0.22
+  slotSpacing: {x: 0.3, y: 0, z: 0.28}
+  layerHeight: 0.25
   normalGridOriginOffset: {x: -0.8, y: 0, z: -0.48}
   abnormalGridOriginOffset: {x: -0.8, y: 0, z: -0.48}
   fitGridToBoxBounds: 1
-  horizontalPadding: 0.1
-  verticalPadding: 0.02
+  horizontalPadding: 0.2
+  verticalPadding: 0.135
   placeApproachOffset: {x: 0, y: 0.35, z: 0}
   placeRetractOffset: {x: 0, y: 0.45, z: 0}
   drawGizmos: 1

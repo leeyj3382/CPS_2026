@@ -570,6 +570,7 @@ namespace CPS.ICPBL.Student
 
             while (dependencies.Controller.IsBusy)
             {
+                MaintainHeldPayloadAlignment(context);
                 if (Time.time > movingDeadline)
                 {
                     dependencies.SetState?.Invoke(RobotRuntimeState.Stuck);
@@ -717,6 +718,8 @@ namespace CPS.ICPBL.Student
                 nextCheckAt = Time.time + Mathf.Max(0.01f, settings.BasePathCheckIntervalSec);
                 yield return null;
             }
+
+            MaintainHeldPayloadAlignment(context);
         }
 
         private bool IsPathBlockedByRobot(
@@ -1245,6 +1248,8 @@ namespace CPS.ICPBL.Student
                 if (dependencies.Gripper.TryGrip(out string reason))
                 {
                     context.PayloadSecured = true;
+                    dependencies.Gripper.BeginSmoothHeldObjectWorldGridAlignment(
+                        StudentConstants.DefaultHeldObjectAlignDurationSec);
                     LogMessage("Grip", string.Format(
                         "Grip success task={0} robot={1} attempt={2}.",
                         context.Request.taskId,
@@ -1397,6 +1402,12 @@ namespace CPS.ICPBL.Student
             }
 
             dependencies.SetState?.Invoke(RobotRuntimeState.Releasing);
+            MaintainHeldPayloadAlignment(context);
+            if (StudentConstants.DefaultPlaceSettleBeforeReleaseSec > 0f)
+            {
+                yield return new WaitForSeconds(StudentConstants.DefaultPlaceSettleBeforeReleaseSec);
+            }
+
             dependencies.Gripper.Release();
             yield return null;
             if (dependencies.Gripper.IsHolding)
@@ -1439,6 +1450,7 @@ namespace CPS.ICPBL.Student
             float deadline = Time.time + Mathf.Max(0f, timeoutSec);
             while (dependencies.Controller.IsBusy)
             {
+                MaintainHeldPayloadAlignment(context);
                 if (Time.time > deadline)
                 {
                     dependencies.SetState?.Invoke(RobotRuntimeState.Stuck);
@@ -1450,6 +1462,23 @@ namespace CPS.ICPBL.Student
 
                 yield return null;
             }
+
+            MaintainHeldPayloadAlignment(context);
+        }
+
+        private void MaintainHeldPayloadAlignment(MissionContext context)
+        {
+            if (context == null || !context.PayloadSecured)
+            {
+                return;
+            }
+
+            if (dependencies.Gripper == null || !dependencies.Gripper.IsHolding)
+            {
+                return;
+            }
+
+            dependencies.Gripper.MaintainHeldObjectWorldGridAlignment();
         }
 
         private void ReleaseKey(MissionContext context, ResourceKey key)

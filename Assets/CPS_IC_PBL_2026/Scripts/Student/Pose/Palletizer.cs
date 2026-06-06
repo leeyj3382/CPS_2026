@@ -45,17 +45,22 @@ namespace CPS.ICPBL.Student
         [SerializeField] private bool registerBoxTriggerOnCommit = true;
 
         [Header("Slot Grid")]
-        [SerializeField] private int columns = 6;
+        [SerializeField] private int columns = 5;
         [SerializeField] private int rows = 4;
+        [SerializeField] private int abnormalColumns = 4;
+        [SerializeField] private int abnormalRows = 3;
         [SerializeField] private int normalSlotCount = 52;
         [SerializeField] private int abnormalSlotCount = 12;
-        [SerializeField] private Vector3 slotSpacing = new Vector3(0.32f, 0f, 0.32f);
-        [SerializeField] private float layerHeight = 0.22f;
+        [SerializeField] private Vector3 slotSpacing = new Vector3(0.3f, 0f, 0.28f);
+        [SerializeField] private float layerHeight = 0.25f;
+        [SerializeField] private float productSize = 0.25f;
+        [SerializeField] private float sideClearance = 0.06f;
+        [SerializeField] private float bottomClearance = 0.01f;
         [SerializeField] private Vector3 normalGridOriginOffset = new Vector3(-0.8f, 0f, -0.48f);
         [SerializeField] private Vector3 abnormalGridOriginOffset = new Vector3(-0.8f, 0f, -0.48f);
         [SerializeField] private bool fitGridToBoxBounds = true;
-        [SerializeField] private float horizontalPadding = 0.1f;
-        [SerializeField] private float verticalPadding = 0.02f;
+        [SerializeField] private float horizontalPadding = 0.2f;
+        [SerializeField] private float verticalPadding = 0.135f;
 
         [Header("Place Offsets")]
         [SerializeField] private Vector3 placeApproachOffset = new Vector3(0f, 0.35f, 0f);
@@ -202,11 +207,16 @@ namespace CPS.ICPBL.Student
         {
             columns = Mathf.Max(1, columns);
             rows = Mathf.Max(1, rows);
+            abnormalColumns = Mathf.Max(1, abnormalColumns);
+            abnormalRows = Mathf.Max(1, abnormalRows);
             normalSlotCount = Mathf.Max(1, normalSlotCount);
             abnormalSlotCount = Mathf.Max(1, abnormalSlotCount);
             slotSpacing.x = Mathf.Max(MinSlotSpacing, slotSpacing.x);
             slotSpacing.z = Mathf.Max(MinSlotSpacing, slotSpacing.z);
             layerHeight = Mathf.Max(MinSlotSpacing, layerHeight);
+            productSize = Mathf.Max(MinSlotSpacing, productSize);
+            sideClearance = Mathf.Max(0f, sideClearance);
+            bottomClearance = Mathf.Max(0f, bottomClearance);
             horizontalPadding = Mathf.Max(0f, horizontalPadding);
             verticalPadding = Mathf.Max(0f, verticalPadding);
             gizmoRadius = Mathf.Max(0.01f, gizmoRadius);
@@ -270,12 +280,17 @@ namespace CPS.ICPBL.Student
                 boxType = boxType,
                 stationId = StudentConstants.GetBoxStationId(boxType),
                 slotIndex = slotIndex,
-                approachPos = placePos + placeApproachOffset,
+                approachPos = ApplyVerticalOffset(placePos, placeApproachOffset),
                 placePos = placePos,
-                retractPos = placePos + placeRetractOffset,
+                retractPos = ApplyVerticalOffset(placePos, placeRetractOffset),
                 reserved = true,
                 reservedByTaskId = taskId
             };
+        }
+
+        private static Vector3 ApplyVerticalOffset(Vector3 basePos, Vector3 offset)
+        {
+            return new Vector3(basePos.x, basePos.y + offset.y, basePos.z);
         }
 
         private Vector3 GetSlotWorldPosition(BoxType boxType, int slotIndex)
@@ -307,11 +322,13 @@ namespace CPS.ICPBL.Student
 
         private Vector3 GetGridOffset(BoxType boxType, int slotIndex)
         {
-            int footprintCount = Mathf.Max(1, columns * rows);
+            int boxColumns = GetConfiguredMajorCount(boxType);
+            int boxRows = GetConfiguredMinorCount(boxType);
+            int footprintCount = Mathf.Max(1, boxColumns * boxRows);
             int footprintIndex = slotIndex % footprintCount;
             int layerIndex = slotIndex / footprintCount;
-            int column = footprintIndex % columns;
-            int row = footprintIndex / columns;
+            int column = footprintIndex % boxColumns;
+            int row = footprintIndex / boxColumns;
             Vector3 origin = boxType == BoxType.Normal
                 ? normalGridOriginOffset
                 : abnormalGridOriginOffset;
@@ -326,34 +343,78 @@ namespace CPS.ICPBL.Student
         {
             float stepX = Mathf.Max(MinSlotSpacing, slotSpacing.x);
             float stepZ = Mathf.Max(MinSlotSpacing, slotSpacing.z);
-            float stepY = Mathf.Max(MinSlotSpacing, layerHeight);
-            int xCount = CalculateSlotCount(boxBounds.size.x, stepX, horizontalPadding);
-            int zCount = CalculateSlotCount(boxBounds.size.z, stepZ, horizontalPadding);
+            float stepY = Mathf.Max(Mathf.Max(MinSlotSpacing, layerHeight), productSize);
+            float horizontalCenterInset = GetHorizontalCenterInset();
+            float verticalCenterInset = GetVerticalCenterInset();
+            int xCapacity = CalculateSlotCount(boxBounds.size.x, stepX, horizontalCenterInset);
+            int zCapacity = CalculateSlotCount(boxBounds.size.z, stepZ, horizontalCenterInset);
             bool majorAxisIsX = boxBounds.size.x >= boxBounds.size.z;
 
-            int majorCount = majorAxisIsX ? xCount : zCount;
-            int minorCount = majorAxisIsX ? zCount : xCount;
+            int majorCapacity = majorAxisIsX ? xCapacity : zCapacity;
+            int minorCapacity = majorAxisIsX ? zCapacity : xCapacity;
+            int majorCount = Mathf.Min(GetConfiguredMajorCount(boxType), majorCapacity);
+            int minorCount = Mathf.Min(GetConfiguredMinorCount(boxType), minorCapacity);
             float majorStep = majorAxisIsX ? stepX : stepZ;
             float minorStepMagnitude = majorAxisIsX ? stepZ : stepX;
-            float majorStart = majorAxisIsX
-                ? boxBounds.min.x + horizontalPadding
-                : boxBounds.min.z + horizontalPadding;
-            float minorStart = GetOutsideMinorStart(boxType, boxBounds, majorAxisIsX);
+            float majorMin = majorAxisIsX
+                ? boxBounds.min.x + horizontalCenterInset
+                : boxBounds.min.z + horizontalCenterInset;
+            float majorMax = majorAxisIsX
+                ? boxBounds.max.x - horizontalCenterInset
+                : boxBounds.max.z - horizontalCenterInset;
+            float minorMin = majorAxisIsX
+                ? boxBounds.min.z + horizontalCenterInset
+                : boxBounds.min.x + horizontalCenterInset;
+            float minorMax = majorAxisIsX
+                ? boxBounds.max.z - horizontalCenterInset
+                : boxBounds.max.x - horizontalCenterInset;
+            float majorStart = GetCenteredStart(majorMin, majorMax, majorCount, majorStep);
+            float minorStart = GetMinorStart(boxType, minorMin, minorMax, minorCount, majorAxisIsX, minorStepMagnitude);
             float minorStep = GetOutsideMinorStep(boxType, majorAxisIsX, minorStepMagnitude);
 
             return new SlotGrid
             {
                 MajorCount = majorCount,
                 MinorCount = minorCount,
-                Layers = CalculateSlotCount(boxBounds.size.y, stepY, verticalPadding),
+                Layers = CalculateSlotCount(boxBounds.size.y, stepY, verticalCenterInset),
                 MajorAxisIsX = majorAxisIsX,
                 MajorStart = majorStart,
                 MinorStart = minorStart,
                 MajorStep = majorStep,
                 MinorStep = minorStep,
-                LayerStartY = boxBounds.min.y + verticalPadding,
+                LayerStartY = boxBounds.min.y + verticalCenterInset,
                 StepY = stepY
             };
+        }
+
+        private int GetConfiguredMajorCount(BoxType boxType)
+        {
+            return boxType == BoxType.Abnormal
+                ? Mathf.Max(1, abnormalColumns)
+                : Mathf.Max(1, columns);
+        }
+
+        private int GetConfiguredMinorCount(BoxType boxType)
+        {
+            return boxType == BoxType.Abnormal
+                ? Mathf.Max(1, abnormalRows)
+                : Mathf.Max(1, rows);
+        }
+
+        private float GetHorizontalCenterInset()
+        {
+            return Mathf.Max(horizontalPadding, productSize * 0.5f + sideClearance);
+        }
+
+        private float GetVerticalCenterInset()
+        {
+            return Mathf.Max(verticalPadding, productSize * 0.5f + bottomClearance);
+        }
+
+        private static float GetCenteredStart(float min, float max, int count, float step)
+        {
+            float span = Mathf.Max(0f, (Mathf.Max(1, count) - 1) * step);
+            return (min + max - span) * 0.5f;
         }
 
         private static Vector3 GetGridPosition(SlotGrid grid, int slotIndex)
@@ -372,25 +433,28 @@ namespace CPS.ICPBL.Student
                 : new Vector3(minor, y, major);
         }
 
-        private float GetOutsideMinorStart(BoxType boxType, Bounds boxBounds, bool majorAxisIsX)
+        private float GetMinorStart(
+            BoxType boxType,
+            float min,
+            float max,
+            int count,
+            bool majorAxisIsX,
+            float stepMagnitude)
         {
-            if (boxType == BoxType.Normal)
-            {
-                return majorAxisIsX
-                    ? boxBounds.max.z - horizontalPadding
-                    : boxBounds.min.x + horizontalPadding;
-            }
-
             if (boxType == BoxType.Abnormal)
             {
-                return majorAxisIsX
-                    ? boxBounds.min.z + horizontalPadding
-                    : boxBounds.min.x + horizontalPadding;
+                return GetCenteredStart(min, max, count, stepMagnitude);
             }
 
-            return majorAxisIsX
-                ? boxBounds.min.z + horizontalPadding
-                : boxBounds.min.x + horizontalPadding;
+            if (boxType == BoxType.Normal)
+            {
+                float centeredStart = GetCenteredStart(min, max, count, stepMagnitude);
+                return majorAxisIsX
+                    ? centeredStart + ((Mathf.Max(1, count) - 1) * stepMagnitude)
+                    : centeredStart;
+            }
+
+            return min;
         }
 
         private static float GetOutsideMinorStep(
