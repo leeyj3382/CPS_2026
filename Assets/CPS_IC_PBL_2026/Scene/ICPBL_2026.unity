@@ -8324,7 +8324,7 @@ MonoBehaviour:
   runAutomatically: 1
   enableDistanceTieBreaker: 0
   logEventsWithoutTelemetry: 1
-  postPickConveyorCooldownSec: 0
+  postPickConveyorCooldownSec: 1.1
   enableInitialPrepositioning: 1
   robotAInitialConveyorId: 1
   robotBInitialConveyorId: 4

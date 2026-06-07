@@ -23,7 +23,7 @@ namespace CPS.ICPBL.Student
         [SerializeField] private bool runAutomatically = true;
         [SerializeField] private bool enableTravelCost = true;
         [SerializeField] private bool logEventsWithoutTelemetry = true;
-        [SerializeField, Min(0f)] private float postPickConveyorCooldownSec = 0f;
+        [SerializeField, Min(0f)] private float postPickConveyorCooldownSec = 1.1f;
 
         [Header("Initial Pre-positioning")]
         [SerializeField] private bool enableInitialPrepositioning = true;
