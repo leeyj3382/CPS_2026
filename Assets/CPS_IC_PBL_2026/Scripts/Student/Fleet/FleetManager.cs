@@ -26,7 +26,7 @@ namespace CPS.ICPBL.Student
         [SerializeField, Min(0f)] private float postPickConveyorCooldownSec = 0f;
 
         [Header("Initial Pre-positioning")]
-        [SerializeField] private bool enableInitialPrepositioning = true;
+        [SerializeField] private bool enableInitialPrepositioning = false;
         [SerializeField] private int robotAInitialConveyorId = 1;
         [SerializeField] private int robotBInitialConveyorId = 4;
 
@@ -304,18 +304,38 @@ namespace CPS.ICPBL.Student
                 return;
             }
 
+            DispatchAvailableRobotsPass(
+                snapshots,
+                availableRobots,
+                false,
+                true);
+            DispatchAvailableRobotsPass(
+                snapshots,
+                availableRobots,
+                true,
+                true);
+
             if (availableRobots.Count > 1)
             {
-                DispatchAvailableRobotsPass(snapshots, availableRobots, false);
+                DispatchAvailableRobotsPass(
+                    snapshots,
+                    availableRobots,
+                    false,
+                    false);
             }
 
-            DispatchAvailableRobotsPass(snapshots, availableRobots, true);
+            DispatchAvailableRobotsPass(
+                snapshots,
+                availableRobots,
+                true,
+                false);
         }
 
         private void DispatchAvailableRobotsPass(
             ConveyorSnapshot[] snapshots,
             List<IRobotAgent> availableRobots,
-            bool allowWorkStealing)
+            bool allowWorkStealing,
+            bool fullQueuesOnly)
         {
             for (int i = 0; i < availableRobots.Count; i++)
             {
@@ -325,7 +345,10 @@ namespace CPS.ICPBL.Student
                     continue;
                 }
 
-                WorkTask[] pendingTasks = BuildPendingTaskArray(robotAgent);
+                WorkTask[] pendingTasks = BuildPendingTaskArray(
+                    robotAgent,
+                    snapshots,
+                    fullQueuesOnly);
                 if (pendingTasks.Length == 0)
                 {
                     continue;
@@ -354,7 +377,10 @@ namespace CPS.ICPBL.Student
                 && FindInFlightTask(robotAgent.RobotId) == null;
         }
 
-        private WorkTask[] BuildPendingTaskArray(IRobotAgent robotAgent)
+        private WorkTask[] BuildPendingTaskArray(
+            IRobotAgent robotAgent,
+            ConveyorSnapshot[] snapshots,
+            bool fullQueuesOnly)
         {
             var pendingTasks = new List<WorkTask>();
             int requiredInitialConveyorId = GetRequiredInitialConveyorId(robotAgent);
@@ -370,11 +396,40 @@ namespace CPS.ICPBL.Student
                         continue;
                     }
 
+                    if (fullQueuesOnly
+                        && !IsFullQueueTask(task, snapshots))
+                    {
+                        continue;
+                    }
+
                     pendingTasks.Add(task);
                 }
             }
 
             return pendingTasks.ToArray();
+        }
+
+        private static bool IsFullQueueTask(
+            WorkTask task,
+            ConveyorSnapshot[] snapshots)
+        {
+            if (task == null || snapshots == null)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < snapshots.Length; i++)
+            {
+                ConveyorSnapshot snapshot = snapshots[i];
+                if (snapshot != null
+                    && snapshot.conveyorId == task.conveyorId)
+                {
+                    return snapshot.queueLength
+                        >= StudentConstants.ConveyorQueueCapacity;
+                }
+            }
+
+            return false;
         }
 
         private StudentRobotSnapshot GetRobotSnapshot(IRobotAgent robotAgent)

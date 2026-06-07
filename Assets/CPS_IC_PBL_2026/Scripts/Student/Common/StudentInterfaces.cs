@@ -105,12 +105,25 @@ namespace CPS.ICPBL.Student
 
     public interface IPathTrafficManager
     {
+        void RegisterActiveBaseRoute(
+            int robotId,
+            int taskId,
+            Vector3 from,
+            IReadOnlyList<Vector3> waypoints,
+            int firstWaypointIndex,
+            bool hasPayload);
+
         void RegisterActiveBasePath(
             int robotId,
             int taskId,
             Vector3 from,
             Vector3 to,
             bool hasPayload);
+
+        void UpdateActiveBasePathProgress(
+            int robotId,
+            int taskId,
+            Vector3 currentPosition);
 
         void ClearActiveBasePath(int robotId, int taskId);
     }

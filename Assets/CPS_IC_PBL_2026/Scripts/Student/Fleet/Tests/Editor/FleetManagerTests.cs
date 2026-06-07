@@ -55,7 +55,7 @@ namespace CPS.ICPBL.Student.Tests
         }
 
         [Test]
-        public void RunSchedulingCycle_PrioritizesEarlierOverflowOverFullSlowQueue()
+        public void RunSchedulingCycle_PrioritizesFullQueueOverEarlierPartialOverflow()
         {
             var robot = new FakeRobotAgent(StudentConstants.RobotAId);
             environment.SetQueueLength(1, 2);
@@ -65,7 +65,7 @@ namespace CPS.ICPBL.Student.Tests
             fleetManager.RunSchedulingCycle();
 
             Assert.That(robot.DispatchCount, Is.EqualTo(1));
-            Assert.That(robot.LastRequest.conveyorId, Is.EqualTo(1));
+            Assert.That(robot.LastRequest.conveyorId, Is.EqualTo(10));
         }
 
         [Test]
@@ -80,6 +80,22 @@ namespace CPS.ICPBL.Student.Tests
 
             Assert.That(robot.DispatchCount, Is.EqualTo(1));
             Assert.That(robot.LastRequest.conveyorId, Is.EqualTo(4));
+        }
+
+        [Test]
+        public void RunSchedulingCycle_FullQueueIsDispatchedBeforeNonFullPreferredQueue()
+        {
+            var robot = new FakeRobotAgent(StudentConstants.RobotAId);
+            environment.SetQueueLength(1, 2);
+            environment.SetQueueLength(
+                8,
+                StudentConstants.ConveyorQueueCapacity);
+            fleetManager.ConfigureRobotAgents(robot, null);
+
+            fleetManager.RunSchedulingCycle();
+
+            Assert.That(robot.DispatchCount, Is.EqualTo(1));
+            Assert.That(robot.LastRequest.conveyorId, Is.EqualTo(8));
         }
 
         [Test]

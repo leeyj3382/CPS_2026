@@ -51,6 +51,7 @@ namespace CPS.ICPBL.Student
             public float BasePathResumeCheckIntervalSec = 0.1f;
             public float BaseStopSettleSec = 0.05f;
             public float BaseBlockedEscapeSec = 2f;
+            public int PathRerouteMaxAttempts = 8;
             public bool EnableDestinationBoxStaging = true;
         }
 
@@ -68,6 +69,7 @@ namespace CPS.ICPBL.Student
             public bool ConveyorPickReported;
             public float NextPathYieldAt;
             public int PathYieldAttempts;
+            public int PathRerouteAttempts;
             public BoxSlotPose ReservedSlot;
             public BoxType DestinationBoxType;
             public ColorClassificationResult Classification;
@@ -429,15 +431,12 @@ namespace CPS.ICPBL.Student
 
             if (hasStationPosition)
             {
-                RegisterActiveBasePath(context, targetStation.BasePosition);
-                dependencies.Controller.GoToOperatingStation(stationId);
-                yield return WaitForBaseMoveWithDynamicStop(
+                yield return MoveBaseAlongOrthogonalRoute(
                     context,
                     stationId,
                     targetStation.BasePosition,
                     label,
-                    () => dependencies.Controller.GoToOperatingStation(stationId));
-                ClearActiveBasePath(context);
+                    true);
             }
             else
             {
@@ -460,20 +459,136 @@ namespace CPS.ICPBL.Student
                 stagingPosition.z));
 
             dependencies.SetState?.Invoke(RobotRuntimeState.MovingToBox);
-            RegisterActiveBasePath(context, stagingPosition);
-            dependencies.Controller.MoveBaseTo(stagingPosition);
-            yield return WaitForBaseMoveWithDynamicStop(
+            yield return MoveBaseAlongOrthogonalRoute(
                 context,
                 StudentConstants.NoStationId,
                 stagingPosition,
                 "box staging",
-                () => dependencies.Controller.MoveBaseTo(stagingPosition));
-            ClearActiveBasePath(context);
+                false);
 
             if (!context.Failed)
             {
                 dependencies.SetCurrentStationId?.Invoke(StudentConstants.NoStationId);
             }
+        }
+
+        private IEnumerator MoveBaseAlongOrthogonalRoute(
+            MissionContext context,
+            int targetStationId,
+            Vector3 targetPosition,
+            string label,
+            bool finishAtOperatingStation)
+        {
+            Vector3[] route = BuildOrthogonalRoute(
+                context,
+                targetStationId,
+                targetPosition);
+
+            int routeIndex = 0;
+            while (routeIndex < route.Length)
+            {
+                Vector3 waypoint = route[routeIndex];
+                bool isFinalSegment = routeIndex == route.Length - 1;
+                if (Vector3.Distance(
+                    FlattenXZ(waypoint - dependencies.Controller.Position),
+                    Vector3.zero) <= 0.05f
+                    && (!isFinalSegment || !finishAtOperatingStation))
+                {
+                    routeIndex++;
+                    continue;
+                }
+
+                int segmentStationId = isFinalSegment
+                    ? targetStationId
+                    : StudentConstants.NoStationId;
+                string segmentLabel = route.Length > 1
+                    ? string.Format(
+                        "{0} segment {1}/{2}",
+                        label,
+                        routeIndex + 1,
+                        route.Length)
+                    : label;
+                Action startMove = isFinalSegment && finishAtOperatingStation
+                    ? () => dependencies.Controller.GoToOperatingStation(targetStationId)
+                    : () => dependencies.Controller.MoveBaseTo(waypoint);
+                Action refreshActiveRoute = () =>
+                    RegisterActiveBaseRoute(context, route, routeIndex);
+
+                refreshActiveRoute();
+                startMove();
+                bool rerouteRequested = false;
+                yield return WaitForBaseMoveWithDynamicStop(
+                    context,
+                    segmentStationId,
+                    waypoint,
+                    segmentLabel,
+                    startMove,
+                    refreshActiveRoute,
+                    value => rerouteRequested = value);
+
+                if (context.Failed)
+                {
+                    ClearActiveBasePath(context);
+                    yield break;
+                }
+
+                if (rerouteRequested)
+                {
+                    ClearActiveBasePath(context);
+                    route = BuildOrthogonalRoute(
+                        context,
+                        targetStationId,
+                        targetPosition);
+                    routeIndex = 0;
+                    continue;
+                }
+
+                context.PathRerouteAttempts = 0;
+                routeIndex++;
+            }
+
+            ClearActiveBasePath(context);
+        }
+
+        private Vector3[] BuildOrthogonalRoute(
+            MissionContext context,
+            int targetStationId,
+            Vector3 targetPosition)
+        {
+            Vector3 from = dependencies.Controller.Position;
+            int fromStationId = dependencies.GetCurrentStationId != null
+                ? dependencies.GetCurrentStationId()
+                : StudentConstants.NoStationId;
+            IReadOnlyList<Vector3> plannedRoute = dependencies.PathPlanner?.BuildBaseRoute(
+                context.Request.robotId,
+                fromStationId,
+                targetStationId,
+                from,
+                targetPosition);
+
+            if (plannedRoute == null || plannedRoute.Count == 0)
+            {
+                Vector3 corner = context.Request.robotId == StudentConstants.RobotBId
+                    ? new Vector3(from.x, from.y, targetPosition.z)
+                    : new Vector3(targetPosition.x, from.y, from.z);
+                if (Vector3.Distance(FlattenXZ(corner - from), Vector3.zero) <= 0.05f
+                    || Vector3.Distance(
+                        FlattenXZ(targetPosition - corner),
+                        Vector3.zero) <= 0.05f)
+                {
+                    return new[] { targetPosition };
+                }
+
+                return new[] { corner, targetPosition };
+            }
+
+            var route = new Vector3[plannedRoute.Count];
+            for (int i = 0; i < plannedRoute.Count; i++)
+            {
+                route[i] = plannedRoute[i];
+            }
+
+            return route;
         }
 
         private bool ShouldStageBeforeDestinationBox(
@@ -563,13 +678,17 @@ namespace CPS.ICPBL.Student
             int stationId,
             Vector3 targetPosition,
             string label,
-            Action restartMove)
+            Action restartMove,
+            Action refreshActiveRoute,
+            Action<bool> onRerouteRequested)
         {
             float movingDeadline = Time.time + Mathf.Max(0f, settings.MoveTimeoutSec);
             float nextCheckAt = Time.time;
 
             while (dependencies.Controller.IsBusy)
             {
+                UpdateActiveBasePathProgress(context);
+
                 if (Time.time > movingDeadline)
                 {
                     dependencies.SetState?.Invoke(RobotRuntimeState.Stuck);
@@ -588,6 +707,24 @@ namespace CPS.ICPBL.Student
                         out bool waitForSameBox,
                         out bool preferDetour))
                 {
+                    if (CanRerouteWithoutStopping(
+                        context,
+                        blockingRobotId,
+                        waitForSameBox,
+                        preferDetour))
+                    {
+                        context.PathRerouteAttempts++;
+                        LogMessage("Path", string.Format(
+                            "Robot={0} task={1} rerouting before {2}; robot A keeps shortest path and robot B selects an alternate path. attempt={3}.",
+                            context.Request.robotId,
+                            context.Request.taskId,
+                            label,
+                            context.PathRerouteAttempts));
+                        ClearActiveBasePath(context);
+                        onRerouteRequested?.Invoke(true);
+                        yield break;
+                    }
+
                     LogMessage("Path", string.Format(
                         "Robot={0} task={1} stopping before {2}; blockedBy robot={3}.",
                         context.Request.robotId,
@@ -629,7 +766,7 @@ namespace CPS.ICPBL.Student
                         if (detoured)
                         {
                             movingDeadline = Time.time + Mathf.Max(0f, settings.MoveTimeoutSec);
-                            RegisterActiveBasePath(context, targetPosition);
+                            refreshActiveRoute?.Invoke();
                             restartMove?.Invoke();
                             nextCheckAt = Time.time + Mathf.Max(0.01f, settings.BasePathCheckIntervalSec);
                             continue;
@@ -672,6 +809,7 @@ namespace CPS.ICPBL.Student
                                 context,
                                 blockingRobotId,
                                 waitForSameBox,
+                                preferDetour,
                                 blockedWaitStartedAt)
                             || sameBoxEscape)
                         {
@@ -708,7 +846,7 @@ namespace CPS.ICPBL.Student
                     }
 
                     movingDeadline = Time.time + Mathf.Max(0f, settings.MoveTimeoutSec);
-                    RegisterActiveBasePath(context, targetPosition);
+                    refreshActiveRoute?.Invoke();
                     restartMove?.Invoke();
                     nextCheckAt = Time.time + Mathf.Max(0.01f, settings.BasePathCheckIntervalSec);
                     continue;
@@ -717,6 +855,23 @@ namespace CPS.ICPBL.Student
                 nextCheckAt = Time.time + Mathf.Max(0.01f, settings.BasePathCheckIntervalSec);
                 yield return null;
             }
+
+            UpdateActiveBasePathProgress(context);
+        }
+
+        private bool CanRerouteWithoutStopping(
+            MissionContext context,
+            int blockingRobotId,
+            bool waitForSameBox,
+            bool preferDetour)
+        {
+            return dependencies.PathPlanner != null
+                && context.Request.robotId == StudentConstants.RobotBId
+                && blockingRobotId == StudentConstants.RobotAId
+                && !waitForSameBox
+                && preferDetour
+                && context.PathRerouteAttempts
+                    < Mathf.Max(1, settings.PathRerouteMaxAttempts);
         }
 
         private bool IsPathBlockedByRobot(
@@ -768,9 +923,12 @@ namespace CPS.ICPBL.Student
             MissionContext context,
             int blockingRobotId,
             bool waitForSameBox,
+            bool preferDetour,
             float blockedWaitStartedAt)
         {
-            if (blockingRobotId == StudentConstants.UnassignedRobotId || waitForSameBox)
+            if (blockingRobotId == StudentConstants.UnassignedRobotId
+                || waitForSameBox
+                || !preferDetour)
             {
                 return false;
             }
@@ -820,6 +978,28 @@ namespace CPS.ICPBL.Student
                 dependencies.Controller.Position,
                 targetPosition,
                 context.PayloadSecured);
+        }
+
+        private void RegisterActiveBaseRoute(
+            MissionContext context,
+            IReadOnlyList<Vector3> route,
+            int firstWaypointIndex)
+        {
+            dependencies.PathTrafficManager?.RegisterActiveBaseRoute(
+                context.Request.robotId,
+                context.Request.taskId,
+                dependencies.Controller.Position,
+                route,
+                firstWaypointIndex,
+                context.PayloadSecured);
+        }
+
+        private void UpdateActiveBasePathProgress(MissionContext context)
+        {
+            dependencies.PathTrafficManager?.UpdateActiveBasePathProgress(
+                context.Request.robotId,
+                context.Request.taskId,
+                dependencies.Controller.Position);
         }
 
         private void ClearActiveBasePath(MissionContext context)
@@ -1085,30 +1265,13 @@ namespace CPS.ICPBL.Student
             Vector3 originalTarget)
         {
             float distance = Mathf.Max(0.5f, settings.PathYieldDistance);
-            Vector3 direction = FlattenXZ(originalTarget - from);
-            if (direction.sqrMagnitude <= 0.0001f)
-            {
-                direction = Vector3.forward;
-            }
-
-            direction.Normalize();
-            Vector3 perpendicular = new Vector3(-direction.z, 0f, direction.x);
-            if (context.Request.robotId == StudentConstants.RobotBId)
-            {
-                perpendicular = -perpendicular;
-            }
-
-            Vector3 backward = -direction;
-            Vector3 diagonalA = (perpendicular + backward).normalized;
-            Vector3 diagonalB = (-perpendicular + backward).normalized;
 
             return new[]
             {
-                ClampYieldCandidate(from + perpendicular * distance),
-                ClampYieldCandidate(from - perpendicular * distance),
-                ClampYieldCandidate(from + backward * distance),
-                ClampYieldCandidate(from + diagonalA * distance),
-                ClampYieldCandidate(from + diagonalB * distance)
+                ClampYieldCandidate(new Vector3(from.x - distance, from.y, from.z)),
+                ClampYieldCandidate(new Vector3(from.x + distance, from.y, from.z)),
+                ClampYieldCandidate(new Vector3(from.x, from.y, from.z - distance)),
+                ClampYieldCandidate(new Vector3(from.x, from.y, from.z + distance))
             };
         }
 

@@ -12,11 +12,24 @@ namespace CPS.ICPBL.Student
         {
             public int RobotId;
             public int TaskId;
-            public Vector3 From;
-            public Vector3 To;
+            public readonly List<Vector3> Points = new List<Vector3>(12);
             public bool HasPayload;
             public float StartedAt;
             public float RegisteredAt;
+
+            public Vector3 From => Points.Count > 0
+                ? Points[0]
+                : Vector3.zero;
+
+            public Vector3 To => Points.Count > 0
+                ? Points[Points.Count - 1]
+                : Vector3.zero;
+        }
+
+        private sealed class PathVisual
+        {
+            public GameObject Root;
+            public LineRenderer Line;
         }
 
         [Header("Robot Home Conveyor Ranges")]
@@ -52,6 +65,38 @@ namespace CPS.ICPBL.Student
         [SerializeField, Min(0f)] private float pathStartPriorityMarginSec = 0.15f;
         [SerializeField, Min(0.1f)] private float activePathStaleSec = 45f;
 
+        [Header("Active Path Visualization")]
+        [SerializeField] private bool showActivePaths = true;
+        [SerializeField] private bool showCrossingPoint = true;
+        [SerializeField, Min(0.01f)] private float pathLineWidth = 0.14f;
+        [SerializeField, Min(0f)] private float pathLineHeight = 0.05f;
+        [SerializeField, Min(0.02f)] private float crossingPointRadius = 0.24f;
+        [SerializeField] private Color robotAPathColor = Color.red;
+        [SerializeField] private Color robotBPathColor = Color.blue;
+        [SerializeField] private Color crossingPointColor = new Color(1f, 0.75f, 0f, 1f);
+
+        [Header("Virtual Guide Network (Dijkstra)")]
+        [SerializeField] private bool enableVirtualGuideNetwork = true;
+        [SerializeField] private bool showVirtualGuideNetwork = true;
+        [SerializeField, Min(0.01f)] private float guideLineWidth = 0.10f;
+        [SerializeField, Min(0.01f)] private float stationGuideLineWidth = 0.16f;
+        [SerializeField, Min(0f)] private float guideLineHeight = 0.035f;
+        [SerializeField] private Color guideLineColor =
+            new Color(0.15f, 1f, 0.55f, 0.72f);
+        [SerializeField] private Color conveyorGuideLineColor =
+            new Color(0.15f, 1f, 0.55f, 0.95f);
+        [SerializeField] private Color normalGuideLineColor =
+            new Color(0.2f, 0.55f, 1f, 0.95f);
+        [SerializeField] private Color abnormalGuideLineColor =
+            new Color(0.95f, 0.2f, 0.2f, 0.95f);
+        [SerializeField, Min(0.1f)] private float fallbackRobotFootprint = 1.5f;
+        [SerializeField, Min(0f)] private float guideSpacingSafetyMargin = 1.0f;
+        [SerializeField, Min(0.1f)] private float minimumGuideSpacing = 2.4f;
+        [SerializeField, Min(0.1f)] private float maximumGuideSpacing = 4.0f;
+        [SerializeField, Min(0f)] private float turnSlowdownPenalty = 2.5f;
+        [SerializeField, Min(0f)] private float occupiedGuideEdgePenalty = 8f;
+        [SerializeField, Min(0f)] private float lowerPriorityIntersectionPenalty = 1000f;
+
         [Header("Lane Routing")]
         [SerializeField] private bool enableLaneRouting = false;
         [SerializeField] private float robotALaneX = -7.2f;
@@ -78,13 +123,21 @@ namespace CPS.ICPBL.Student
         private readonly Dictionary<int, ActiveBasePath> activeBasePaths =
             new Dictionary<int, ActiveBasePath>();
 
+        private readonly Dictionary<int, PathVisual> pathVisuals =
+            new Dictionary<int, PathVisual>();
+
         private readonly List<Vector3> reusableRoute = new List<Vector3>(5);
         private readonly List<Vector3> reusableYieldCandidates = new List<Vector3>(16);
+        private readonly VirtualGuideGraph virtualGuideGraph = new VirtualGuideGraph();
 
         private IRobotController[] robotControllers;
         private IRobotAgent[] robotAgents;
         private OperatingStations operatingStations;
         private ITelemetryLogger telemetryLogger;
+        private Material pathVisualMaterial;
+        private PathVisual crossingPointVisual;
+        private GameObject guideNetworkRoot;
+        private bool guideNetworkDirty = true;
 
         public void ConfigureRobots(
             IRobotController robotA,
@@ -99,6 +152,8 @@ namespace CPS.ICPBL.Student
             robotAgents = new[] { robotAAgent, robotBAgent };
             operatingStations = stationData;
             telemetryLogger = logger;
+            guideNetworkDirty = true;
+            EnsureVirtualGuideNetwork();
         }
 
         public bool RequiresCentralZone(int robotId, int fromStationId, int toStationId)
@@ -159,18 +214,61 @@ namespace CPS.ICPBL.Student
         {
             reusableRoute.Clear();
 
-            if (!enableLaneRouting || IsNearSamePoint(from, to))
+            if (IsNearSamePoint(from, to))
             {
                 AddRoutePoint(to);
                 return reusableRoute;
             }
 
-            float laneX = GetLaneX(robotId, toStationId);
-            float targetLaneZ = GetLaneZ(toStationId, to);
+            if (enableVirtualGuideNetwork)
+            {
+                EnsureVirtualGuideNetwork();
+                if (virtualGuideGraph.TryBuildRoute(
+                    from,
+                    to,
+                    waypointMergeDistance,
+                    turnSlowdownPenalty,
+                    (edgeFrom, edgeTo) => GetGuideEdgeTrafficCost(
+                        robotId,
+                        edgeFrom,
+                        edgeTo),
+                    reusableRoute,
+                    out float routeCost))
+                {
+                    telemetryLogger?.LogMessage(
+                        "Path",
+                        string.Format(
+                            "Dijkstra route robot={0} fromStation={1} toStation={2} waypoints={3} cost={4:0.00}.",
+                            robotId,
+                            fromStationId,
+                            toStationId,
+                            reusableRoute.Count,
+                            routeCost));
+                    return reusableRoute;
+                }
+            }
 
-            AddRoutePoint(new Vector3(laneX, from.y, from.z));
-            AddRoutePoint(new Vector3(laneX, from.y, targetLaneZ));
-            AddRoutePoint(new Vector3(to.x, from.y, targetLaneZ));
+            if (enableLaneRouting)
+            {
+                float laneX = GetLaneX(robotId, toStationId);
+                float targetLaneZ = GetLaneZ(toStationId, to);
+
+                AddRoutePoint(new Vector3(laneX, from.y, from.z));
+                AddRoutePoint(new Vector3(laneX, from.y, targetLaneZ));
+                AddRoutePoint(new Vector3(to.x, from.y, targetLaneZ));
+                AddRoutePoint(to);
+                return reusableRoute;
+            }
+
+            if (robotId == StudentConstants.RobotBId)
+            {
+                AddRoutePoint(new Vector3(from.x, from.y, to.z));
+            }
+            else
+            {
+                AddRoutePoint(new Vector3(to.x, from.y, from.z));
+            }
+
             AddRoutePoint(to);
 
             return reusableRoute;
@@ -184,31 +282,26 @@ namespace CPS.ICPBL.Student
             reusableYieldCandidates.Clear();
 
             float distance = Mathf.Max(0.5f, detourDistance);
-            Vector3 direction = FlattenXZ(originalTarget - from);
-            if (direction.sqrMagnitude <= 0.0001f)
+            if (enableVirtualGuideNetwork)
             {
-                direction = Vector3.forward;
+                EnsureVirtualGuideNetwork();
+                virtualGuideGraph.AppendAdjacentGuidePoints(
+                    from,
+                    distance,
+                    reusableYieldCandidates);
+                if (reusableYieldCandidates.Count > 0)
+                {
+                    return reusableYieldCandidates;
+                }
             }
 
-            direction.Normalize();
-            Vector3 perpendicular = new Vector3(-direction.z, 0f, direction.x);
-            if (robotId == StudentConstants.RobotBId)
-            {
-                perpendicular = -perpendicular;
-            }
-
-            Vector3 backward = -direction;
-            Vector3 diagonalA = (perpendicular + backward).normalized;
-            Vector3 diagonalB = (-perpendicular + backward).normalized;
             float laneX = GetLaneX(robotId, StudentConstants.NoStationId);
 
-            AddBoxBypassCandidates(from, originalTarget);
-            AddYieldCandidate(from + perpendicular * distance);
-            AddYieldCandidate(from - perpendicular * distance);
             AddYieldCandidate(new Vector3(laneX, from.y, from.z));
-            AddYieldCandidate(from + backward * distance);
-            AddYieldCandidate(from + diagonalA * distance);
-            AddYieldCandidate(from + diagonalB * distance);
+            AddYieldCandidate(new Vector3(from.x - distance, from.y, from.z));
+            AddYieldCandidate(new Vector3(from.x + distance, from.y, from.z));
+            AddYieldCandidate(new Vector3(from.x, from.y, from.z - distance));
+            AddYieldCandidate(new Vector3(from.x, from.y, from.z + distance));
 
             return reusableYieldCandidates;
         }
@@ -330,6 +423,14 @@ namespace CPS.ICPBL.Student
                     return true;
                 }
 
+                if (CurrentRobotHasTrafficPriority(
+                        robotId,
+                        controller.RobotId)
+                    && IsRobotInTransit(controller.RobotId))
+                {
+                    continue;
+                }
+
                 Vector2 other = ToXZ(controller.Position);
                 float progress = Vector2.Dot(other - start, path) / pathLengthSqr;
                 if (progress <= 0f || progress > 1f)
@@ -366,7 +467,10 @@ namespace CPS.ICPBL.Student
                     }
 
                     blockingRobotId = controller.RobotId;
-                    preferDetour = distanceToPath > hardStationaryClearanceRadius;
+                    preferDetour = OtherRobotHasTrafficPriority(
+                        robotId,
+                        controller.RobotId)
+                        || distanceToPath > hardStationaryClearanceRadius;
                     return true;
                 }
             }
@@ -386,41 +490,116 @@ namespace CPS.ICPBL.Student
             Vector3 to,
             bool hasPayload)
         {
+            RegisterActiveBaseRoute(
+                robotId,
+                taskId,
+                from,
+                new[] { to },
+                0,
+                hasPayload);
+        }
+
+        public void RegisterActiveBaseRoute(
+            int robotId,
+            int taskId,
+            Vector3 from,
+            IReadOnlyList<Vector3> waypoints,
+            int firstWaypointIndex,
+            bool hasPayload)
+        {
             if (!StudentConstants.IsRobotId(robotId))
             {
                 return;
             }
 
             float startedAt = Time.time;
-            if (activeBasePaths.TryGetValue(robotId, out ActiveBasePath existing)
-                && existing != null
-                && existing.TaskId == taskId)
+            if (!activeBasePaths.TryGetValue(robotId, out ActiveBasePath path)
+                || path == null
+                || path.TaskId != taskId)
             {
-                startedAt = existing.StartedAt;
+                path = new ActiveBasePath();
+            }
+            else
+            {
+                startedAt = path.StartedAt;
             }
 
-            activeBasePaths[robotId] = new ActiveBasePath
+            path.RobotId = robotId;
+            path.TaskId = taskId;
+            path.HasPayload = hasPayload;
+            path.StartedAt = startedAt;
+            path.RegisteredAt = Time.time;
+            path.Points.Clear();
+            path.Points.Add(from);
+
+            int safeStartIndex = Mathf.Max(0, firstWaypointIndex);
+            if (waypoints != null)
             {
-                RobotId = robotId,
-                TaskId = taskId,
-                From = from,
-                To = to,
-                HasPayload = hasPayload,
-                StartedAt = startedAt,
-                RegisteredAt = Time.time
-            };
+                for (int i = safeStartIndex; i < waypoints.Count; i++)
+                {
+                    Vector3 waypoint = waypoints[i];
+                    if (DistanceXZ(
+                        path.Points[path.Points.Count - 1],
+                        waypoint) <= 0.05f)
+                    {
+                        path.Points[path.Points.Count - 1] = waypoint;
+                        continue;
+                    }
+
+                    path.Points.Add(waypoint);
+                }
+            }
+
+            if (path.Points.Count < 2)
+            {
+                activeBasePaths.Remove(robotId);
+                HidePathVisualization(robotId);
+                UpdateCrossingPointVisualization();
+                return;
+            }
+
+            activeBasePaths[robotId] = path;
+            UpdatePathVisualization(path);
+            UpdateCrossingPointVisualization();
 
             telemetryLogger?.LogMessage(
                 "Path",
                 string.Format(
-                    "Active path robot={0} task={1} from=({2:0.0},{3:0.0}) to=({4:0.0},{5:0.0}) payload={6}.",
+                    "Active route robot={0} task={1} points={2} from=({3:0.0},{4:0.0}) to=({5:0.0},{6:0.0}) payload={7}.",
                     robotId,
                     taskId,
-                    from.x,
-                    from.z,
-                    to.x,
-                    to.z,
+                    path.Points.Count,
+                    path.From.x,
+                    path.From.z,
+                    path.To.x,
+                    path.To.z,
                     hasPayload));
+        }
+
+        public void UpdateActiveBasePathProgress(
+            int robotId,
+            int taskId,
+            Vector3 currentPosition)
+        {
+            if (!activeBasePaths.TryGetValue(robotId, out ActiveBasePath path)
+                || path == null
+                || path.TaskId != taskId
+                || path.Points.Count < 2)
+            {
+                return;
+            }
+
+            while (path.Points.Count > 2
+                && DistanceXZ(currentPosition, path.Points[1])
+                    <= waypointMergeDistance)
+            {
+                path.Points.RemoveAt(0);
+            }
+
+            path.Points[0] = currentPosition;
+            path.RegisteredAt = Time.time;
+            UpdatePathVisualization(path);
+            UpdateCrossingPointVisualization();
         }
 
         public void ClearActiveBasePath(int robotId, int taskId)
@@ -436,6 +615,8 @@ namespace CPS.ICPBL.Student
             }
 
             activeBasePaths.Remove(robotId);
+            HidePathVisualization(robotId);
+            UpdateCrossingPointVisualization();
         }
 
         public bool TryReserveBaseSegment(
@@ -567,6 +748,24 @@ namespace CPS.ICPBL.Student
         private void OnValidate()
         {
             NormalizeSettings();
+            guideNetworkDirty = true;
+        }
+
+        private void OnDisable()
+        {
+            HideAllPathVisualizations();
+            if (guideNetworkRoot != null)
+            {
+                guideNetworkRoot.SetActive(false);
+            }
+        }
+
+        private void OnDestroy()
+        {
+            if (pathVisualMaterial != null)
+            {
+                Destroy(pathVisualMaterial);
+            }
         }
 
         private void NormalizeSettings()
@@ -606,6 +805,25 @@ namespace CPS.ICPBL.Student
             crossingPriorityMargin = Mathf.Max(0.8f, crossingPriorityMargin);
             pathStartPriorityMarginSec = Mathf.Max(0f, pathStartPriorityMarginSec);
             activePathStaleSec = Mathf.Max(0.1f, activePathStaleSec);
+            pathLineWidth = Mathf.Max(0.01f, pathLineWidth);
+            pathLineHeight = Mathf.Max(0f, pathLineHeight);
+            crossingPointRadius = Mathf.Max(0.02f, crossingPointRadius);
+            guideLineWidth = Mathf.Max(0.01f, guideLineWidth);
+            stationGuideLineWidth = Mathf.Max(
+                guideLineWidth,
+                stationGuideLineWidth);
+            guideLineHeight = Mathf.Max(0f, guideLineHeight);
+            fallbackRobotFootprint = Mathf.Max(0.1f, fallbackRobotFootprint);
+            guideSpacingSafetyMargin = Mathf.Max(0f, guideSpacingSafetyMargin);
+            minimumGuideSpacing = Mathf.Max(0.1f, minimumGuideSpacing);
+            maximumGuideSpacing = Mathf.Max(
+                minimumGuideSpacing,
+                maximumGuideSpacing);
+            turnSlowdownPenalty = Mathf.Max(0f, turnSlowdownPenalty);
+            occupiedGuideEdgePenalty = Mathf.Max(0f, occupiedGuideEdgePenalty);
+            lowerPriorityIntersectionPenalty = Mathf.Max(
+                1000f,
+                lowerPriorityIntersectionPenalty);
             waypointMergeDistance = Mathf.Max(0.1f, waypointMergeDistance);
             detourDistance = Mathf.Max(4.5f, detourDistance);
             boxKeepOutRadius = Mathf.Max(2.25f, boxKeepOutRadius);
@@ -666,6 +884,14 @@ namespace CPS.ICPBL.Student
             {
                 IRobotController controller = robotControllers[i];
                 if (controller == null || controller.RobotId == robotId)
+                {
+                    continue;
+                }
+
+                if (CurrentRobotHasTrafficPriority(
+                        robotId,
+                        controller.RobotId)
+                    && IsRobotInTransit(controller.RobotId))
                 {
                     continue;
                 }
@@ -758,37 +984,34 @@ namespace CPS.ICPBL.Student
 
             PurgeStaleActivePaths();
 
+            activeBasePaths.TryGetValue(robotId, out ActiveBasePath mine);
             foreach (KeyValuePair<int, ActiveBasePath> pair in activeBasePaths)
             {
                 ActiveBasePath other = pair.Value;
-                if (other == null || other.RobotId == robotId)
+                if (other == null
+                    || other.RobotId == robotId
+                    || other.Points.Count < 2)
                 {
                     continue;
                 }
 
-                ClosestPointsOnSegmentsXZ(
+                if (!TryFindRouteConflict(
+                    mine,
                     from,
                     to,
-                    other.From,
-                    other.To,
+                    other,
                     out Vector3 myCrossPoint,
-                    out Vector3 otherCrossPoint);
-
-                if (DistanceXZ(myCrossPoint, otherCrossPoint) > segmentClearanceRadius)
+                    out Vector3 otherCrossPoint,
+                    out float myDistanceToCrossing,
+                    out float otherDistanceToCrossing))
                 {
                     continue;
                 }
 
-                Vector3 otherCurrent = GetRobotPosition(other.RobotId, other.From);
-                if (HasPassedPoint(from, to, myCrossPoint)
-                    || HasPassedPoint(otherCurrent, other.To, otherCrossPoint))
-                {
-                    continue;
-                }
-
-                float myDistanceToCrossing = DistanceXZ(from, myCrossPoint);
-                float otherDistanceToCrossing = DistanceXZ(otherCurrent, otherCrossPoint);
-                int targetBoxStationId = GetTargetBoxStationId(StudentConstants.NoStationId, to);
+                Vector3 finalTarget = mine != null ? mine.To : to;
+                int targetBoxStationId = GetTargetBoxStationId(
+                    StudentConstants.NoStationId,
+                    finalTarget);
                 bool currentHasSameBoxPriority = CurrentRobotHasSameBoxPriority(
                     robotId,
                     targetBoxStationId,
@@ -820,12 +1043,87 @@ namespace CPS.ICPBL.Student
                     || otherDistanceToCrossing <= crossingHoldDistance)
                 {
                     blockingRobotId = other.RobotId;
-                    preferDetour = myDistanceToCrossing > hardStationaryClearanceRadius;
+                    preferDetour = OtherRobotHasTrafficPriority(
+                        robotId,
+                        other.RobotId);
                     return true;
                 }
             }
 
             return false;
+        }
+
+        private bool TryFindRouteConflict(
+            ActiveBasePath mine,
+            Vector3 fallbackFrom,
+            Vector3 fallbackTo,
+            ActiveBasePath other,
+            out Vector3 myConflictPoint,
+            out Vector3 otherConflictPoint,
+            out float myDistanceToConflict,
+            out float otherDistanceToConflict)
+        {
+            myConflictPoint = Vector3.zero;
+            otherConflictPoint = Vector3.zero;
+            myDistanceToConflict = float.PositiveInfinity;
+            otherDistanceToConflict = float.PositiveInfinity;
+
+            int mySegmentCount = mine != null && mine.Points.Count >= 2
+                ? mine.Points.Count - 1
+                : 1;
+            float myDistanceBeforeSegment = 0f;
+            for (int mySegmentIndex = 0;
+                mySegmentIndex < mySegmentCount;
+                mySegmentIndex++)
+            {
+                Vector3 myFrom = mine != null
+                    ? mine.Points[mySegmentIndex]
+                    : fallbackFrom;
+                Vector3 myTo = mine != null
+                    ? mine.Points[mySegmentIndex + 1]
+                    : fallbackTo;
+
+                float otherDistanceBeforeSegment = 0f;
+                for (int otherSegmentIndex = 0;
+                    otherSegmentIndex < other.Points.Count - 1;
+                    otherSegmentIndex++)
+                {
+                    Vector3 otherFrom = other.Points[otherSegmentIndex];
+                    Vector3 otherTo = other.Points[otherSegmentIndex + 1];
+                    ClosestPointsOnSegmentsXZ(
+                        myFrom,
+                        myTo,
+                        otherFrom,
+                        otherTo,
+                        out Vector3 myPoint,
+                        out Vector3 otherPoint);
+
+                    if (DistanceXZ(myPoint, otherPoint)
+                        <= segmentClearanceRadius)
+                    {
+                        float candidateMyDistance =
+                            myDistanceBeforeSegment
+                            + DistanceXZ(myFrom, myPoint);
+                        if (candidateMyDistance < myDistanceToConflict)
+                        {
+                            myConflictPoint = myPoint;
+                            otherConflictPoint = otherPoint;
+                            myDistanceToConflict = candidateMyDistance;
+                            otherDistanceToConflict =
+                                otherDistanceBeforeSegment
+                                + DistanceXZ(otherFrom, otherPoint);
+                        }
+                    }
+
+                    otherDistanceBeforeSegment += DistanceXZ(
+                        otherFrom,
+                        otherTo);
+                }
+
+                myDistanceBeforeSegment += DistanceXZ(myFrom, myTo);
+            }
+
+            return !float.IsPositiveInfinity(myDistanceToConflict);
         }
 
         private int GetWorkingBoxStationId(IRobotController controller)
@@ -913,11 +1211,31 @@ namespace CPS.ICPBL.Student
 
         private bool EmptyRobotHasPriority(int robotId, int otherRobotId)
         {
+            if (CurrentRobotHasTrafficPriority(robotId, otherRobotId))
+            {
+                return true;
+            }
+
+            if (OtherRobotHasTrafficPriority(robotId, otherRobotId))
+            {
+                return false;
+            }
+
             return !RobotHasPayload(robotId) && RobotHasPayload(otherRobotId);
         }
 
         private bool OtherEmptyRobotHasPriority(int robotId, int otherRobotId)
         {
+            if (OtherRobotHasTrafficPriority(robotId, otherRobotId))
+            {
+                return true;
+            }
+
+            if (CurrentRobotHasTrafficPriority(robotId, otherRobotId))
+            {
+                return false;
+            }
+
             return RobotHasPayload(robotId) && !RobotHasPayload(otherRobotId);
         }
 
@@ -957,6 +1275,23 @@ namespace CPS.ICPBL.Student
         {
             return state == RobotRuntimeState.MovingToBox
                 || state == RobotRuntimeState.Placing;
+        }
+
+        private bool IsRobotInTransit(int robotId)
+        {
+            if (activeBasePaths.TryGetValue(
+                    robotId,
+                    out ActiveBasePath activePath)
+                && activePath != null
+                && !IsNearSamePoint(activePath.From, activePath.To))
+            {
+                return true;
+            }
+
+            IRobotAgent agent = GetRobotAgent(robotId);
+            return agent != null
+                && (agent.State == RobotRuntimeState.MovingToConveyor
+                    || agent.State == RobotRuntimeState.MovingToBox);
         }
 
         private static bool IsFixedConveyorWorkState(RobotRuntimeState state)
@@ -1142,8 +1477,561 @@ namespace CPS.ICPBL.Student
 
             for (int i = 0; i < staleRobotIds.Count; i++)
             {
-                activeBasePaths.Remove(staleRobotIds[i]);
+                int robotId = staleRobotIds[i];
+                activeBasePaths.Remove(robotId);
+                HidePathVisualization(robotId);
             }
+
+            if (staleRobotIds.Count > 0)
+            {
+                UpdateCrossingPointVisualization();
+            }
+        }
+
+        private void EnsureVirtualGuideNetwork()
+        {
+            if (!guideNetworkDirty && virtualGuideGraph.IsBuilt)
+            {
+                if (guideNetworkRoot != null)
+                {
+                    guideNetworkRoot.SetActive(showVirtualGuideNetwork);
+                }
+
+                return;
+            }
+
+            float guideSpacing = CalculateGuideSpacing();
+            virtualGuideGraph.Rebuild(operatingStations, guideSpacing);
+            guideNetworkDirty = false;
+            UpdateGuideNetworkVisualization();
+            telemetryLogger?.LogMessage(
+                "Path",
+                string.Format(
+                    "Virtual guide spacing={0:0.00}m from robot footprint and safety margin.",
+                    guideSpacing));
+        }
+
+        private float CalculateGuideSpacing()
+        {
+            float largestFootprint = fallbackRobotFootprint;
+            if (robotControllers != null)
+            {
+                for (int i = 0; i < robotControllers.Length; i++)
+                {
+                    largestFootprint = Mathf.Max(
+                        largestFootprint,
+                        MeasureRobotFootprint(robotControllers[i]));
+                }
+            }
+
+            return Mathf.Clamp(
+                largestFootprint + guideSpacingSafetyMargin,
+                minimumGuideSpacing,
+                maximumGuideSpacing);
+        }
+
+        private float MeasureRobotFootprint(IRobotController controller)
+        {
+            Component component = controller as Component;
+            if (component == null)
+            {
+                return fallbackRobotFootprint;
+            }
+
+            bool hasBounds = false;
+            Bounds footprintBounds = default;
+            Collider[] colliders = component.GetComponentsInChildren<Collider>(true);
+            for (int i = 0; i < colliders.Length; i++)
+            {
+                Collider collider = colliders[i];
+                if (collider == null || collider.isTrigger)
+                {
+                    continue;
+                }
+
+                if (!hasBounds)
+                {
+                    footprintBounds = collider.bounds;
+                    hasBounds = true;
+                }
+                else
+                {
+                    footprintBounds.Encapsulate(collider.bounds);
+                }
+            }
+
+            if (!hasBounds)
+            {
+                Renderer[] renderers =
+                    component.GetComponentsInChildren<Renderer>(true);
+                for (int i = 0; i < renderers.Length; i++)
+                {
+                    Renderer renderer = renderers[i];
+                    if (renderer == null)
+                    {
+                        continue;
+                    }
+
+                    if (!hasBounds)
+                    {
+                        footprintBounds = renderer.bounds;
+                        hasBounds = true;
+                    }
+                    else
+                    {
+                        footprintBounds.Encapsulate(renderer.bounds);
+                    }
+                }
+            }
+
+            if (!hasBounds)
+            {
+                return fallbackRobotFootprint;
+            }
+
+            return Mathf.Max(
+                fallbackRobotFootprint,
+                footprintBounds.size.x,
+                footprintBounds.size.z);
+        }
+
+        private float GetGuideEdgeTrafficCost(
+            int robotId,
+            Vector3 edgeFrom,
+            Vector3 edgeTo)
+        {
+            float cost = 0f;
+            PurgeStaleActivePaths();
+            foreach (KeyValuePair<int, ActiveBasePath> pair in activeBasePaths)
+            {
+                ActiveBasePath other = pair.Value;
+                if (other == null || other.RobotId == robotId)
+                {
+                    continue;
+                }
+
+                if (CurrentRobotHasTrafficPriority(robotId, other.RobotId))
+                {
+                    continue;
+                }
+
+                if (!PathConflictsWithSegment(
+                    other,
+                    edgeFrom,
+                    edgeTo,
+                    segmentClearanceRadius))
+                {
+                    continue;
+                }
+
+                bool lowerPriorityAtIntersection =
+                    robotId == StudentConstants.RobotBId
+                    && other.RobotId == StudentConstants.RobotAId;
+                cost += lowerPriorityAtIntersection
+                    ? lowerPriorityIntersectionPenalty
+                    : occupiedGuideEdgePenalty;
+            }
+
+            if (robotControllers == null)
+            {
+                return cost;
+            }
+
+            for (int i = 0; i < robotControllers.Length; i++)
+            {
+                IRobotController controller = robotControllers[i];
+                if (controller == null || controller.RobotId == robotId)
+                {
+                    continue;
+                }
+
+                if (CurrentRobotHasTrafficPriority(
+                    robotId,
+                    controller.RobotId))
+                {
+                    continue;
+                }
+
+                float distanceToEdge = PointSegmentDistanceXZ(
+                    controller.Position,
+                    edgeFrom,
+                    edgeTo);
+                if (distanceToEdge > movingBlockDistance)
+                {
+                    continue;
+                }
+
+                cost += robotId == StudentConstants.RobotBId
+                    && controller.RobotId == StudentConstants.RobotAId
+                    ? lowerPriorityIntersectionPenalty
+                    : occupiedGuideEdgePenalty;
+            }
+
+            return cost;
+        }
+
+        private static bool PathConflictsWithSegment(
+            ActiveBasePath path,
+            Vector3 segmentFrom,
+            Vector3 segmentTo,
+            float clearanceRadius)
+        {
+            if (path == null || path.Points.Count < 2)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < path.Points.Count - 1; i++)
+            {
+                if (SegmentDistanceXZ(
+                    segmentFrom,
+                    segmentTo,
+                    path.Points[i],
+                    path.Points[i + 1]) <= clearanceRadius)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private void UpdateGuideNetworkVisualization()
+        {
+            if (guideNetworkRoot != null)
+            {
+                if (Application.isPlaying)
+                {
+                    Destroy(guideNetworkRoot);
+                }
+                else
+                {
+                    DestroyImmediate(guideNetworkRoot);
+                }
+            }
+
+            if (!showVirtualGuideNetwork || !virtualGuideGraph.IsBuilt)
+            {
+                guideNetworkRoot = null;
+                return;
+            }
+
+            Material material = GetPathVisualMaterial();
+            if (material == null)
+            {
+                return;
+            }
+
+            guideNetworkRoot = new GameObject("VirtualGuideNetwork");
+            guideNetworkRoot.transform.SetParent(transform, false);
+            IReadOnlyList<VirtualGuideGraph.GuidePath> guidePaths =
+                virtualGuideGraph.Paths;
+            for (int i = 0; i < guidePaths.Count; i++)
+            {
+                VirtualGuideGraph.GuidePath guidePath = guidePaths[i];
+                if (guidePath.Kind == VirtualGuideGraph.GuidePathKind.NormalBox
+                    || guidePath.Kind
+                        == VirtualGuideGraph.GuidePathKind.AbnormalBox)
+                {
+                    continue;
+                }
+
+                var pathObject = new GameObject(guidePath.Name);
+                pathObject.transform.SetParent(
+                    guideNetworkRoot.transform,
+                    false);
+
+                var line = pathObject.AddComponent<LineRenderer>();
+                line.useWorldSpace = true;
+                line.material = material;
+                line.positionCount = guidePath.Points.Length;
+                float width = guidePath.Kind
+                    == VirtualGuideGraph.GuidePathKind.Connector
+                    ? guideLineWidth
+                    : stationGuideLineWidth;
+                Color color = GetGuidePathColor(guidePath.Kind);
+                line.startWidth = width;
+                line.endWidth = width;
+                line.startColor = color;
+                line.endColor = color;
+                line.numCapVertices = 4;
+                line.numCornerVertices = 4;
+                line.shadowCastingMode =
+                    UnityEngine.Rendering.ShadowCastingMode.Off;
+                line.receiveShadows = false;
+
+                for (int pointIndex = 0;
+                    pointIndex < guidePath.Points.Length;
+                    pointIndex++)
+                {
+                    Vector3 point = guidePath.Points[pointIndex];
+                    point.y += guideLineHeight;
+                    line.SetPosition(pointIndex, point);
+                }
+            }
+        }
+
+        private Color GetGuidePathColor(
+            VirtualGuideGraph.GuidePathKind kind)
+        {
+            switch (kind)
+            {
+                case VirtualGuideGraph.GuidePathKind.Conveyor:
+                    return conveyorGuideLineColor;
+                case VirtualGuideGraph.GuidePathKind.NormalBox:
+                    return normalGuideLineColor;
+                case VirtualGuideGraph.GuidePathKind.AbnormalBox:
+                    return abnormalGuideLineColor;
+                default:
+                    return guideLineColor;
+            }
+        }
+
+        private void UpdatePathVisualization(ActiveBasePath path)
+        {
+            if (!showActivePaths || path == null || path.Points.Count < 2)
+            {
+                if (path != null)
+                {
+                    HidePathVisualization(path.RobotId);
+                }
+
+                return;
+            }
+
+            PathVisual visual = GetOrCreatePathVisual(
+                path.RobotId,
+                path.RobotId == StudentConstants.RobotAId
+                    ? robotAPathColor
+                    : robotBPathColor,
+                false);
+            if (visual == null || visual.Line == null)
+            {
+                return;
+            }
+
+            visual.Root.SetActive(true);
+            visual.Line.positionCount = path.Points.Count;
+            for (int i = 0; i < path.Points.Count; i++)
+            {
+                visual.Line.SetPosition(
+                    i,
+                    ToFloorLinePoint(path.Points[i]));
+            }
+        }
+
+        private void UpdateCrossingPointVisualization()
+        {
+            if (!showActivePaths
+                || !showCrossingPoint
+                || !activeBasePaths.TryGetValue(
+                    StudentConstants.RobotAId,
+                    out ActiveBasePath pathA)
+                || pathA == null
+                || !activeBasePaths.TryGetValue(
+                    StudentConstants.RobotBId,
+                    out ActiveBasePath pathB)
+                || pathB == null
+                || !TryGetPathIntersection(
+                    pathA,
+                    pathB,
+                    out Vector2 intersection))
+            {
+                HideCrossingPointVisualization();
+                return;
+            }
+
+            crossingPointVisual = crossingPointVisual
+                ?? CreatePathVisual(
+                    "RobotPathCrossingPoint",
+                    crossingPointColor,
+                    true);
+            if (crossingPointVisual == null || crossingPointVisual.Line == null)
+            {
+                return;
+            }
+
+            const int segmentCount = 24;
+            crossingPointVisual.Root.SetActive(true);
+            crossingPointVisual.Line.positionCount = segmentCount;
+            float y = Mathf.Max(pathA.From.y, pathB.From.y)
+                + pathLineHeight
+                + 0.01f;
+            for (int i = 0; i < segmentCount; i++)
+            {
+                float angle = Mathf.PI * 2f * i / segmentCount;
+                crossingPointVisual.Line.SetPosition(
+                    i,
+                    new Vector3(
+                        intersection.x + Mathf.Cos(angle) * crossingPointRadius,
+                        y,
+                        intersection.y + Mathf.Sin(angle) * crossingPointRadius));
+            }
+        }
+
+        private static bool TryGetPathIntersection(
+            ActiveBasePath left,
+            ActiveBasePath right,
+            out Vector2 intersection)
+        {
+            intersection = default;
+            if (left == null
+                || right == null
+                || left.Points.Count < 2
+                || right.Points.Count < 2)
+            {
+                return false;
+            }
+
+            for (int leftIndex = 0;
+                leftIndex < left.Points.Count - 1;
+                leftIndex++)
+            {
+                for (int rightIndex = 0;
+                    rightIndex < right.Points.Count - 1;
+                    rightIndex++)
+                {
+                    if (TryGetSegmentIntersection(
+                        ToXZ(left.Points[leftIndex]),
+                        ToXZ(left.Points[leftIndex + 1]),
+                        ToXZ(right.Points[rightIndex]),
+                        ToXZ(right.Points[rightIndex + 1]),
+                        out intersection))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        private PathVisual GetOrCreatePathVisual(int robotId, Color color, bool loop)
+        {
+            if (pathVisuals.TryGetValue(robotId, out PathVisual visual)
+                && visual != null
+                && visual.Root != null
+                && visual.Line != null)
+            {
+                ConfigureLineRenderer(visual.Line, color, loop);
+                return visual;
+            }
+
+            visual = CreatePathVisual(
+                robotId == StudentConstants.RobotAId
+                    ? "RobotAPath"
+                    : "RobotBPath",
+                color,
+                loop);
+            if (visual != null)
+            {
+                pathVisuals[robotId] = visual;
+            }
+
+            return visual;
+        }
+
+        private PathVisual CreatePathVisual(string objectName, Color color, bool loop)
+        {
+            Material material = GetPathVisualMaterial();
+            if (material == null)
+            {
+                return null;
+            }
+
+            var root = new GameObject(objectName);
+            root.transform.SetParent(transform, false);
+            var line = root.AddComponent<LineRenderer>();
+            line.useWorldSpace = true;
+            line.material = material;
+            line.numCapVertices = 4;
+            line.numCornerVertices = 4;
+            line.textureMode = LineTextureMode.Stretch;
+            line.shadowCastingMode =
+                UnityEngine.Rendering.ShadowCastingMode.Off;
+            line.receiveShadows = false;
+            line.alignment = LineAlignment.View;
+            ConfigureLineRenderer(line, color, loop);
+
+            return new PathVisual
+            {
+                Root = root,
+                Line = line
+            };
+        }
+
+        private void ConfigureLineRenderer(LineRenderer line, Color color, bool loop)
+        {
+            line.startWidth = pathLineWidth;
+            line.endWidth = pathLineWidth;
+            line.startColor = color;
+            line.endColor = color;
+            line.loop = loop;
+        }
+
+        private Material GetPathVisualMaterial()
+        {
+            if (pathVisualMaterial != null)
+            {
+                return pathVisualMaterial;
+            }
+
+            Shader shader = Shader.Find("Sprites/Default");
+            if (shader == null)
+            {
+                shader = Shader.Find("Unlit/Color");
+            }
+
+            if (shader == null)
+            {
+                Debug.LogWarning(
+                    "[PathPlanner] No shader is available for active path visualization.",
+                    this);
+                return null;
+            }
+
+            pathVisualMaterial = new Material(shader)
+            {
+                name = "StudentRobotPathMaterial"
+            };
+            return pathVisualMaterial;
+        }
+
+        private Vector3 ToFloorLinePoint(Vector3 point)
+        {
+            point.y += pathLineHeight;
+            return point;
+        }
+
+        private void HidePathVisualization(int robotId)
+        {
+            if (pathVisuals.TryGetValue(robotId, out PathVisual visual)
+                && visual != null
+                && visual.Root != null)
+            {
+                visual.Root.SetActive(false);
+            }
+        }
+
+        private void HideCrossingPointVisualization()
+        {
+            if (crossingPointVisual != null && crossingPointVisual.Root != null)
+            {
+                crossingPointVisual.Root.SetActive(false);
+            }
+        }
+
+        private void HideAllPathVisualizations()
+        {
+            foreach (KeyValuePair<int, PathVisual> pair in pathVisuals)
+            {
+                if (pair.Value != null && pair.Value.Root != null)
+                {
+                    pair.Value.Root.SetActive(false);
+                }
+            }
+
+            HideCrossingPointVisualization();
         }
 
         private static bool HasPassedPoint(Vector3 current, Vector3 target, Vector3 point)
@@ -1227,6 +2115,7 @@ namespace CPS.ICPBL.Student
             if (reusableRoute.Count > 0
                 && DistanceXZ(reusableRoute[reusableRoute.Count - 1], point) <= waypointMergeDistance)
             {
+                reusableRoute[reusableRoute.Count - 1] = point;
                 return;
             }
 
