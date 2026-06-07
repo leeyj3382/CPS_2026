@@ -30,6 +30,14 @@ namespace CPS.ICPBL.Student
         [SerializeField] private int robotAInitialConveyorId = 1;
         [SerializeField] private int robotBInitialConveyorId = 4;
 
+        [Header("Terminal Parking")]
+        [SerializeField] private bool enableTerminalParking = true;
+        [SerializeField, Min(1)] private int terminalParkingCompletionIndex = 63;
+        [SerializeField] private Vector3 terminalParkingPosition = new Vector3(6.2f, 0f, -5.2f);
+        private static readonly Vector3 SafeTerminalParkingPosition =
+            new Vector3(6.2f, 0f, -5.2f);
+        private const float TerminalParkingCriticalPathClearance = 4.5f;
+
         private readonly HashSet<int> reservedConveyorIds = new HashSet<int>();
         private readonly Dictionary<int, float> lastAssignedAtByConveyor =
             new Dictionary<int, float>();
@@ -49,7 +57,9 @@ namespace CPS.ICPBL.Student
         private TaskAllocator taskAllocator;
         private float nextPollingAt;
         private int nextTaskId = 1;
+        private int successfulMissionCompletionCount;
         private bool initialPrepositionRequested;
+        private bool terminalParkingRequested;
 
         public IReadOnlyList<WorkTask> Tasks => tasks;
         public IReadOnlyCollection<int> ReservedConveyorIds => reservedConveyorIds;
@@ -97,6 +107,7 @@ namespace CPS.ICPBL.Student
                 robotBInitialConveyorId,
                 StudentConstants.MinConveyorId,
                 StudentConstants.MaxConveyorId);
+            terminalParkingCompletionIndex = Mathf.Max(1, terminalParkingCompletionIndex);
         }
 
         /// <summary>
@@ -134,6 +145,8 @@ namespace CPS.ICPBL.Student
             RegisterRobotAgent(robotB);
             initialPrepositionRequested = false;
             completedInitialConveyorRobotIds.Clear();
+            successfulMissionCompletionCount = 0;
+            terminalParkingRequested = false;
         }
 
         public void RegisterRobotAgent(IRobotAgent robotAgent)
@@ -497,6 +510,20 @@ namespace CPS.ICPBL.Student
             return null;
         }
 
+        private IRobotAgent FindRobotAgent(int robotId)
+        {
+            for (int i = 0; i < robotAgents.Count; i++)
+            {
+                IRobotAgent robotAgent = robotAgents[i];
+                if (robotAgent != null && robotAgent.RobotId == robotId)
+                {
+                    return robotAgent;
+                }
+            }
+
+            return null;
+        }
+
         private void DispatchTask(IRobotAgent robotAgent, WorkTask task)
         {
             int robotId = robotAgent.RobotId;
@@ -617,6 +644,8 @@ namespace CPS.ICPBL.Student
                 MarkInitialConveyorCompleted(task);
                 task.status = TaskStatus.Completed;
                 RemoveActiveTaskIfMatches(task.conveyorId, task);
+                successfulMissionCompletionCount++;
+                TryRequestTerminalParking(task);
                 LogMessage("Scheduling", string.Format("Completed task={0}.", task.taskId));
                 return;
             }
@@ -651,6 +680,97 @@ namespace CPS.ICPBL.Student
                 "Failed task={0} after retryCount={1}.",
                 task.taskId,
                 task.retryCount));
+        }
+
+        private void TryRequestTerminalParking(WorkTask task)
+        {
+            if (!enableTerminalParking
+                || terminalParkingRequested
+                || task == null
+                || successfulMissionCompletionCount != terminalParkingCompletionIndex)
+            {
+                return;
+            }
+
+            IRobotAgent robotAgent = FindRobotAgent(task.assignedRobotId);
+            IRobotParkingController parkingController = robotAgent as IRobotParkingController;
+            if (parkingController == null)
+            {
+                LogMessage("Parking", string.Format(
+                    "Terminal parking unavailable robot={0} after completedCount={1}.",
+                    task.assignedRobotId,
+                    successfulMissionCompletionCount));
+                return;
+            }
+
+            Vector3 parkingPosition = ResolveTerminalParkingPosition();
+            if (!parkingController.TryParkAt(parkingPosition))
+            {
+                LogMessage("Parking", string.Format(
+                    "Terminal parking rejected robot={0} after completedCount={1}.",
+                    task.assignedRobotId,
+                    successfulMissionCompletionCount));
+                return;
+            }
+
+            terminalParkingRequested = true;
+            LogMessage("Parking", string.Format(
+                "Robot={0} parking after completedCount={1} to=({2:0.0},{3:0.0}).",
+                task.assignedRobotId,
+                successfulMissionCompletionCount,
+                parkingPosition.x,
+                parkingPosition.z));
+        }
+
+        private Vector3 ResolveTerminalParkingPosition()
+        {
+            Vector3 configured = terminalParkingPosition;
+            configured.y = 0f;
+            if (IsTerminalParkingPositionClear(configured))
+            {
+                return configured;
+            }
+
+            LogMessage("Parking", string.Format(
+                "Configured terminal parking ({0:0.0},{1:0.0}) is near a final approach path; using ({2:0.0},{3:0.0}).",
+                configured.x,
+                configured.z,
+                SafeTerminalParkingPosition.x,
+                SafeTerminalParkingPosition.z));
+            return SafeTerminalParkingPosition;
+        }
+
+        private static bool IsTerminalParkingPositionClear(Vector3 position)
+        {
+            return DistanceToSegmentXZ(position, new Vector3(5.5f, 0f, 10.5f), new Vector3(0f, 0f, -6f))
+                    > TerminalParkingCriticalPathClearance
+                && DistanceToSegmentXZ(position, new Vector3(9.5f, 0f, 10.5f), new Vector3(0f, 0f, -6f))
+                    > TerminalParkingCriticalPathClearance
+                && DistanceToSegmentXZ(position, new Vector3(5.5f, 0f, 10.5f), new Vector3(8.5f, 0f, 2.5f))
+                    > TerminalParkingCriticalPathClearance
+                && DistanceToSegmentXZ(position, new Vector3(9.5f, 0f, 10.5f), new Vector3(8.5f, 0f, 2.5f))
+                    > TerminalParkingCriticalPathClearance
+                && DistanceToSegmentXZ(position, new Vector3(-8f, 0f, -7f), new Vector3(8.5f, 0f, 2.5f))
+                    > TerminalParkingCriticalPathClearance;
+        }
+
+        private static float DistanceToSegmentXZ(
+            Vector3 point,
+            Vector3 segmentFrom,
+            Vector3 segmentTo)
+        {
+            Vector2 pointXZ = new Vector2(point.x, point.z);
+            Vector2 fromXZ = new Vector2(segmentFrom.x, segmentFrom.z);
+            Vector2 toXZ = new Vector2(segmentTo.x, segmentTo.z);
+            Vector2 segment = toXZ - fromXZ;
+            float lengthSqr = segment.sqrMagnitude;
+            if (lengthSqr <= Mathf.Epsilon)
+            {
+                return Vector2.Distance(pointXZ, fromXZ);
+            }
+
+            float t = Mathf.Clamp01(Vector2.Dot(pointXZ - fromXZ, segment) / lengthSqr);
+            return Vector2.Distance(pointXZ, fromXZ + segment * t);
         }
 
         private void MarkConveyorPicked(WorkTask task)

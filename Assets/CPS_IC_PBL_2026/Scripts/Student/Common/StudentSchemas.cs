@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using CPS.ICPBL.Common;
 using UnityEngine;
 
@@ -176,5 +177,29 @@ namespace CPS.ICPBL.Student
         public float priority;
         public float acquiredAt;
         public float expiresAt;
+    }
+
+    [Serializable]
+    public class TimedRouteSegment
+    {
+        public Vector3 from;
+        public Vector3 to;
+        public float startTime;
+        public float endTime;
+        public bool isWait;
+    }
+
+    [Serializable]
+    public class TimedRouteReservationToken
+    {
+        public int robotId;
+        public int taskId;
+        public int fromStationId;
+        public int toStationId;
+        public float priority;
+        public float acquiredAt;
+        public float expiresAt;
+        public readonly List<TimedRouteSegment> segments =
+            new List<TimedRouteSegment>();
     }
 }
