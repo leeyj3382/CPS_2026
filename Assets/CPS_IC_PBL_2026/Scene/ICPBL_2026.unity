@@ -8467,8 +8467,8 @@ MonoBehaviour:
   normalBoxTrigger: {fileID: 242586149}
   abnormalBoxTrigger: {fileID: 196160528}
   registerBoxTriggerOnCommit: 1
-  columns: 5
-  rows: 4
+  columns: 6
+  rows: 3
   normalSlotCount: 52
   abnormalSlotCount: 12
   slotSpacing: {x: 0.3, y: 0, z: 0.28}
@@ -8503,24 +8503,24 @@ MonoBehaviour:
   conveyorApproachOffset: {x: 0, y: 0.25, z: 0}
   conveyorActionOffset: {x: 0, y: -0.35, z: 0}
   conveyorRetractOffset: {x: 0, y: 0.35, z: 0}
-  conveyorArmMoveDuration: 0.7
+  conveyorArmMoveDuration: 0.4
   boxApproachOffset: {x: 0, y: 0.55, z: 0}
   boxActionOffset: {x: 0, y: 0.2, z: 0}
   boxRetractOffset: {x: 0, y: 0.65, z: 0}
-  boxArmMoveDuration: 0.7
+  boxArmMoveDuration: 0.4
   conveyorPickOverrides: []
   normalBoxBaseOverride:
     stationId: 0
     approachPos: {x: 0, y: 0, z: 0}
     actionPos: {x: 0, y: 0, z: 0}
     retractPos: {x: 0, y: 0, z: 0}
-    armMoveDuration: 0.7
+    armMoveDuration: 0.4
   abnormalBoxBaseOverride:
     stationId: 0
     approachPos: {x: 0, y: 0, z: 0}
     actionPos: {x: 0, y: 0, z: 0}
     retractPos: {x: 0, y: 0, z: 0}
-    armMoveDuration: 0.7
+    armMoveDuration: 0.4
   drawGizmos: 1
   debugStationId: 1
   gizmoRadius: 0.08

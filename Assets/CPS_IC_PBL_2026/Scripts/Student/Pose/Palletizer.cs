@@ -45,8 +45,8 @@ namespace CPS.ICPBL.Student
         [SerializeField] private bool registerBoxTriggerOnCommit = true;
 
         [Header("Slot Grid")]
-        [SerializeField] private int columns = 5;
-        [SerializeField] private int rows = 4;
+        [SerializeField] private int columns = 6;
+        [SerializeField] private int rows = 3;
         [SerializeField] private int abnormalColumns = 4;
         [SerializeField] private int abnormalRows = 3;
         [SerializeField] private int normalSlotCount = 52;
@@ -346,14 +346,10 @@ namespace CPS.ICPBL.Student
             float stepY = Mathf.Max(Mathf.Max(MinSlotSpacing, layerHeight), productSize);
             float horizontalCenterInset = GetHorizontalCenterInset();
             float verticalCenterInset = GetVerticalCenterInset();
-            int xCapacity = CalculateSlotCount(boxBounds.size.x, stepX, horizontalCenterInset);
-            int zCapacity = CalculateSlotCount(boxBounds.size.z, stepZ, horizontalCenterInset);
             bool majorAxisIsX = boxBounds.size.x >= boxBounds.size.z;
 
-            int majorCapacity = majorAxisIsX ? xCapacity : zCapacity;
-            int minorCapacity = majorAxisIsX ? zCapacity : xCapacity;
-            int majorCount = Mathf.Min(GetConfiguredMajorCount(boxType), majorCapacity);
-            int minorCount = Mathf.Min(GetConfiguredMinorCount(boxType), minorCapacity);
+            int majorCount = GetConfiguredMajorCount(boxType);
+            int minorCount = GetConfiguredMinorCount(boxType);
             float majorStep = majorAxisIsX ? stepX : stepZ;
             float minorStepMagnitude = majorAxisIsX ? stepZ : stepX;
             float majorMin = majorAxisIsX
@@ -498,7 +494,7 @@ namespace CPS.ICPBL.Student
 
             SlotGrid grid = BuildBoundsGrid(boxType, boxBounds);
             int capacity = Mathf.Max(1, grid.MajorCount * grid.MinorCount * grid.Layers);
-            return slotIndex < capacity;
+            return slotIndex < Mathf.Max(capacity, GetSlots(boxType).Length);
         }
 
         private void RegisterBoxTriggerSlot(BoxType boxType, int slotIndex)
