@@ -862,8 +862,8 @@ namespace CPS.ICPBL.Student
             score += ScoreCandidateClearanceFromActiveRobots(
                 context,
                 candidate,
-                2.8f,
-                8f);
+                3.1f,
+                9f);
             return score;
         }
 
@@ -1264,8 +1264,8 @@ namespace CPS.ICPBL.Student
             score += ScoreCandidateClearanceFromActiveRobots(
                 context,
                 candidate,
-                3.0f,
-                8f);
+                3.3f,
+                9f);
 
             if (approachOwner == null)
             {
@@ -1293,15 +1293,15 @@ namespace CPS.ICPBL.Student
                     candidate,
                     boxStationPosition,
                     ownerBoxDepartureRoute,
-                    3.2f,
-                    12f);
+                    3.4f,
+                    13f);
                 score += ScoreRouteClearanceAgainstRoute(
                     from,
                     route,
                     boxStationPosition,
                     ownerBoxDepartureRoute,
-                    2.8f,
-                    8f);
+                    3.0f,
+                    9f);
             }
 
             score += ScoreNormalBoxOwnerNextCellPenalty(
