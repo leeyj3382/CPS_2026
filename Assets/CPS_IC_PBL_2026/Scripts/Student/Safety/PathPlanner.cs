@@ -1731,7 +1731,7 @@ namespace CPS.ICPBL.Student
 
         private bool OtherEmptyRobotHasPriority(int robotId, int otherRobotId)
         {
-            return RobotHasPayload(robotId) && !RobotHasPayload(otherRobotId);
+            return !RobotHasPayload(robotId) && RobotHasPayload(otherRobotId);
         }
 
         private static bool CurrentRobotHasTrafficPriority(int robotId, int otherRobotId)
