@@ -2259,13 +2259,20 @@ namespace CPS.ICPBL.Student
                 return false;
             }
 
+            float startDistance = DistanceXZ(from, boxCenter);
+            float endDistance = DistanceXZ(to, boxCenter);
+            if (startDistance <= boxKeepOutRadius + 0.25f
+                && endDistance > startDistance + 0.25f
+                && PointSegmentDistanceXZ(boxCenter, from, to) >= startDistance - 0.2f)
+            {
+                return true;
+            }
+
             if (DistanceXZ(from, station) > 0.75f)
             {
                 return false;
             }
 
-            float startDistance = DistanceXZ(from, boxCenter);
-            float endDistance = DistanceXZ(to, boxCenter);
             return endDistance > startDistance + 0.25f;
         }
 
