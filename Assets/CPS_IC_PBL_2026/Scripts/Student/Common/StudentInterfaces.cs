@@ -23,6 +23,11 @@ namespace CPS.ICPBL.Student
         bool TryPrepositionToStation(int stationId);
     }
 
+    public interface IRobotParkingController
+    {
+        bool TryParkAt(Vector3 position);
+    }
+
     public interface ITaskAllocator
     {
         WorkTask SelectBestTask(
@@ -101,6 +106,24 @@ namespace CPS.ICPBL.Student
             out int blockingTaskId);
 
         void ReleaseBaseSegment(PathReservationToken token);
+    }
+
+    public interface IPathTimeReservationManager
+    {
+        bool TryReserveTimedBaseRoute(
+            int robotId,
+            int taskId,
+            int fromStationId,
+            int toStationId,
+            Vector3 from,
+            Vector3 to,
+            bool hasPayload,
+            float priority,
+            out TimedRouteReservationToken token,
+            out int blockingRobotId,
+            out int blockingTaskId);
+
+        void ReleaseTimedBaseRoute(TimedRouteReservationToken token);
     }
 
     public interface IPathTrafficManager

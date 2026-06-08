@@ -6,7 +6,7 @@ using UnityEngine;
 namespace CPS.ICPBL.Student
 {
     [DisallowMultipleComponent]
-    public sealed class PathPlanner : MonoBehaviour, IPathPlanner, IPathReservationManager, IPathTrafficManager
+    public sealed class PathPlanner : MonoBehaviour, IPathPlanner, IPathReservationManager, IPathTrafficManager, IPathTimeReservationManager
     {
         private sealed class ActiveBasePath
         {
@@ -19,6 +19,37 @@ namespace CPS.ICPBL.Student
             public float RegisteredAt;
         }
 
+        private struct PlannerNode
+        {
+            public Vector3 Position;
+            public string Name;
+
+            public PlannerNode(Vector3 position, string name)
+            {
+                Position = position;
+                Name = name;
+            }
+        }
+
+        private struct SearchState
+        {
+            public int NodeIndex;
+            public int TimeSlot;
+
+            public SearchState(int nodeIndex, int timeSlot)
+            {
+                NodeIndex = nodeIndex;
+                TimeSlot = timeSlot;
+            }
+        }
+
+        private struct SearchRecord
+        {
+            public float Cost;
+            public int PreviousKey;
+            public bool Closed;
+        }
+
         [Header("Robot Home Conveyor Ranges")]
         [SerializeField] private int robotAMinConveyor = 1;
         [SerializeField] private int robotAMaxConveyor = 3;
@@ -29,6 +60,7 @@ namespace CPS.ICPBL.Student
         [SerializeField] private bool requireCentralZoneForUnknownStation = true;
         [SerializeField] private bool requireCentralZoneForCrossSideMove = true;
         [SerializeField] private bool requireCentralZoneForBoxAccess = true;
+        [SerializeField] private bool requireCentralZoneForBoxToCornerConveyors = true;
 
         [Header("Base Segment Reservation")]
         [SerializeField] private bool enableSegmentReservation = true;
@@ -72,14 +104,33 @@ namespace CPS.ICPBL.Student
         [SerializeField, Min(0.1f)] private float boxKeepOutRadius = 2.25f;
         [SerializeField, Min(0.1f)] private float boxBypassPadding = 1.6f;
 
+        [Header("Timed Route Planning")]
+        [SerializeField] private bool enableTimedRoutePlanning = false;
+        [SerializeField, Min(0.05f)] private float timedSlotSec = 0.25f;
+        [SerializeField, Min(5f)] private float timedPlanningHorizonSec = 36f;
+        [SerializeField, Min(0.1f)] private float timedEstimatedBaseSpeed = 4.5f;
+        [SerializeField, Min(0f)] private float timedReservationBufferSec = 0.20f;
+        [SerializeField, Min(0f)] private float timedMoveSettleSec = 0.10f;
+        [SerializeField, Min(0.1f)] private float timedGraphConnectDistance = 9.5f;
+        [SerializeField, Min(1)] private int timedGraphConnectCount = 5;
+        [SerializeField, Min(0f)] private float timedWaitCostSec = 0.06f;
+        [SerializeField, Min(0f)] private float timedPayloadWaitCostSec = 0.02f;
+        [SerializeField, Min(0.1f)] private float timedReservationStaleSec = 45f;
+
         private readonly List<PathReservationToken> activeReservations =
             new List<PathReservationToken>();
+
+        private readonly List<TimedRouteReservationToken> activeTimedReservations =
+            new List<TimedRouteReservationToken>();
 
         private readonly Dictionary<int, ActiveBasePath> activeBasePaths =
             new Dictionary<int, ActiveBasePath>();
 
         private readonly List<Vector3> reusableRoute = new List<Vector3>(5);
         private readonly List<Vector3> reusableYieldCandidates = new List<Vector3>(16);
+        private readonly List<PlannerNode> reusableTimedNodes = new List<PlannerNode>(48);
+        private readonly List<List<int>> reusableTimedEdges = new List<List<int>>(48);
+        private readonly List<SearchState> reusableOpenStates = new List<SearchState>(256);
 
         private IRobotController[] robotControllers;
         private IRobotAgent[] robotAgents;
@@ -103,7 +154,8 @@ namespace CPS.ICPBL.Student
 
         public bool RequiresCentralZone(int robotId, int fromStationId, int toStationId)
         {
-            if (enableSegmentReservation)
+            if (enableSegmentReservation
+                && !RequiresSegmentReservationFallbackCentralZone(fromStationId, toStationId))
             {
                 return false;
             }
@@ -213,6 +265,803 @@ namespace CPS.ICPBL.Student
             return reusableYieldCandidates;
         }
 
+        public bool TryReserveTimedBaseRoute(
+            int robotId,
+            int taskId,
+            int fromStationId,
+            int toStationId,
+            Vector3 from,
+            Vector3 to,
+            bool hasPayload,
+            float priority,
+            out TimedRouteReservationToken token,
+            out int blockingRobotId,
+            out int blockingTaskId)
+        {
+            token = null;
+            blockingRobotId = StudentConstants.UnassignedRobotId;
+            blockingTaskId = StudentConstants.NoTaskId;
+
+            if (!enableTimedRoutePlanning)
+            {
+                return false;
+            }
+
+            if (!StudentConstants.IsRobotId(robotId))
+            {
+                return false;
+            }
+
+            PurgeStaleTimedReservations();
+            PurgeStaleReservations();
+
+            if (IsNearSamePoint(from, to))
+            {
+                token = new TimedRouteReservationToken
+                {
+                    robotId = robotId,
+                    taskId = taskId,
+                    fromStationId = fromStationId,
+                    toStationId = toStationId,
+                    priority = priority,
+                    acquiredAt = Time.time,
+                    expiresAt = Time.time + timedReservationStaleSec
+                };
+                activeTimedReservations.Add(token);
+                return true;
+            }
+
+            BuildTimedRouteGraph(robotId, fromStationId, toStationId, from, to, out int startNode, out int targetNode);
+            if (!TryFindTimedRoute(
+                robotId,
+                taskId,
+                hasPayload,
+                startNode,
+                targetNode,
+                out List<TimedRouteSegment> segments))
+            {
+                return false;
+            }
+
+            token = new TimedRouteReservationToken
+            {
+                robotId = robotId,
+                taskId = taskId,
+                fromStationId = fromStationId,
+                toStationId = toStationId,
+                priority = priority,
+                acquiredAt = Time.time,
+                expiresAt = segments.Count > 0
+                    ? segments[segments.Count - 1].endTime + timedReservationStaleSec
+                    : Time.time + timedReservationStaleSec
+            };
+            token.segments.AddRange(segments);
+            activeTimedReservations.Add(token);
+
+            telemetryLogger?.LogMessage(
+                "Path",
+                string.Format(
+                    "Timed route robot={0} task={1} from=({2:0.0},{3:0.0}) to=({4:0.0},{5:0.0}) segments={6} eta={7:0.00}s.",
+                    robotId,
+                    taskId,
+                    from.x,
+                    from.z,
+                    to.x,
+                    to.z,
+                    token.segments.Count,
+                    token.segments.Count > 0
+                        ? Mathf.Max(0f, token.segments[token.segments.Count - 1].endTime - Time.time)
+                        : 0f));
+            return true;
+        }
+
+        public void ReleaseTimedBaseRoute(TimedRouteReservationToken token)
+        {
+            if (token == null)
+            {
+                return;
+            }
+
+            for (int i = activeTimedReservations.Count - 1; i >= 0; i--)
+            {
+                if (activeTimedReservations[i] == token)
+                {
+                    activeTimedReservations.RemoveAt(i);
+                    telemetryLogger?.LogMessage(
+                        "Path",
+                        string.Format(
+                            "Timed release robot={0} task={1}.",
+                            token.robotId,
+                            token.taskId));
+                    return;
+                }
+            }
+        }
+
+        private void BuildTimedRouteGraph(
+            int robotId,
+            int fromStationId,
+            int toStationId,
+            Vector3 from,
+            Vector3 to,
+            out int startNode,
+            out int targetNode)
+        {
+            reusableTimedNodes.Clear();
+            reusableTimedEdges.Clear();
+
+            startNode = AddTimedNode(from, "start");
+            targetNode = AddTimedNode(to, "target");
+
+            AddTimedLaneNodes(robotId, fromStationId, toStationId, from, to);
+            ConnectTimedAxisAlignedNodes();
+            ConnectTimedVisibleNode(startNode);
+            ConnectTimedVisibleNode(targetNode);
+            AddTimedEdgeIfClear(startNode, targetNode);
+        }
+
+        private void AddTimedLaneNodes(
+            int robotId,
+            int fromStationId,
+            int toStationId,
+            Vector3 from,
+            Vector3 to)
+        {
+            float y = from.y;
+            float[] westLaneZ =
+            {
+                lowerLaneZ,
+                -7f,
+                -4.8f,
+                -3f,
+                1f,
+                5f,
+                upperLaneZ
+            };
+            float[] eastLaneZ =
+            {
+                lowerLaneZ,
+                -4.8f,
+                -3f,
+                1f,
+                2.5f,
+                4.7f,
+                5f,
+                upperLaneZ
+            };
+            float[] upperLaneX =
+            {
+                robotALaneX,
+                -6.5f,
+                -2.5f,
+                1.5f,
+                5.5f,
+                robotBLaneX,
+                9.5f
+            };
+            float[] lowerLaneX =
+            {
+                robotALaneX,
+                -3.8f,
+                0f,
+                3.8f,
+                robotBLaneX,
+                8.5f
+            };
+            float[] normalApproachX =
+            {
+                robotALaneX,
+                -3.8f,
+                0f,
+                3.8f,
+                robotBLaneX
+            };
+            float[] abnormalApproachZ =
+            {
+                1.1f,
+                2.5f,
+                4.7f,
+                upperLaneZ
+            };
+
+            for (int i = 0; i < westLaneZ.Length; i++)
+            {
+                AddTimedNode(new Vector3(robotALaneX, y, westLaneZ[i]), "west-lane");
+            }
+
+            for (int i = 0; i < eastLaneZ.Length; i++)
+            {
+                AddTimedNode(new Vector3(robotBLaneX, y, eastLaneZ[i]), "east-lane");
+            }
+
+            for (int i = 0; i < upperLaneX.Length; i++)
+            {
+                AddTimedNode(new Vector3(upperLaneX[i], y, upperLaneZ), "upper-lane");
+            }
+
+            for (int i = 0; i < lowerLaneX.Length; i++)
+            {
+                AddTimedNode(new Vector3(lowerLaneX[i], y, lowerLaneZ), "lower-lane");
+            }
+
+            for (int i = 0; i < normalApproachX.Length; i++)
+            {
+                AddTimedNode(new Vector3(normalApproachX[i], y, -4.8f), "normal-approach");
+            }
+
+            for (int i = 0; i < abnormalApproachZ.Length; i++)
+            {
+                AddTimedNode(new Vector3(4.9f, y, abnormalApproachZ[i]), "abnormal-staging");
+                AddTimedNode(new Vector3(robotBLaneX, y, abnormalApproachZ[i]), "abnormal-lane");
+            }
+
+            AddTimedStationNodes(y);
+        }
+
+        private void AddTimedStationNodes(float y)
+        {
+            if (operatingStations != null)
+            {
+                for (int stationId = StudentConstants.MinConveyorId;
+                    stationId <= StudentConstants.MaxConveyorId;
+                    stationId++)
+                {
+                    if (operatingStations.TryGetStation(
+                        stationId,
+                        out OperatingStations.Station station))
+                    {
+                        AddTimedNode(
+                            new Vector3(station.BasePosition.x, y, station.BasePosition.z),
+                            string.Format("conveyor-{0}", stationId));
+                    }
+                }
+            }
+
+            Vector3 normalBox = GetBoxStationPosition(StudentConstants.NormalBoxStationId);
+            Vector3 abnormalBox = GetBoxStationPosition(StudentConstants.AbnormalBoxStationId);
+            normalBox.y = y;
+            abnormalBox.y = y;
+            AddTimedNode(normalBox, "normal-box");
+            AddTimedNode(new Vector3(0f, y, -4.8f), "normal-box-approach");
+            AddTimedNode(abnormalBox, "abnormal-box");
+            AddTimedNode(new Vector3(7.2f, y, 2.5f), "abnormal-box-approach");
+            AddTimedNode(new Vector3(4.9f, y, 2.5f), "abnormal-box-staging");
+        }
+
+        private int AddTimedNode(Vector3 position, string name)
+        {
+            position = ClampToWorld(position);
+            int index = reusableTimedNodes.Count;
+            reusableTimedNodes.Add(new PlannerNode(position, name));
+            reusableTimedEdges.Add(new List<int>(8));
+            return index;
+        }
+
+        private void ConnectTimedAxisAlignedNodes()
+        {
+            for (int i = 0; i < reusableTimedNodes.Count; i++)
+            {
+                for (int j = i + 1; j < reusableTimedNodes.Count; j++)
+                {
+                    Vector3 left = reusableTimedNodes[i].Position;
+                    Vector3 right = reusableTimedNodes[j].Position;
+                    bool axisAligned =
+                        Mathf.Abs(left.x - right.x) <= 0.05f
+                        || Mathf.Abs(left.z - right.z) <= 0.05f;
+                    if (!axisAligned)
+                    {
+                        continue;
+                    }
+
+                    AddTimedEdgeIfClear(i, j);
+                }
+            }
+        }
+
+        private void ConnectTimedVisibleNode(int nodeIndex)
+        {
+            var candidates = new List<int>(reusableTimedNodes.Count);
+            for (int i = 0; i < reusableTimedNodes.Count; i++)
+            {
+                if (i == nodeIndex)
+                {
+                    continue;
+                }
+
+                float distance = DistanceXZ(
+                    reusableTimedNodes[nodeIndex].Position,
+                    reusableTimedNodes[i].Position);
+                if (distance > timedGraphConnectDistance)
+                {
+                    continue;
+                }
+
+                if (CrossesStaticKeepOut(
+                    reusableTimedNodes[nodeIndex].Position,
+                    reusableTimedNodes[i].Position))
+                {
+                    continue;
+                }
+
+                candidates.Add(i);
+            }
+
+            candidates.Sort((left, right) => DistanceXZ(
+                reusableTimedNodes[nodeIndex].Position,
+                reusableTimedNodes[left].Position).CompareTo(DistanceXZ(
+                reusableTimedNodes[nodeIndex].Position,
+                reusableTimedNodes[right].Position)));
+
+            int limit = Mathf.Min(
+                Mathf.Max(1, timedGraphConnectCount),
+                candidates.Count);
+            for (int i = 0; i < limit; i++)
+            {
+                AddTimedEdgeIfClear(nodeIndex, candidates[i]);
+            }
+        }
+
+        private void AddTimedEdgeIfClear(int fromIndex, int toIndex)
+        {
+            if (fromIndex == toIndex)
+            {
+                return;
+            }
+
+            Vector3 from = reusableTimedNodes[fromIndex].Position;
+            Vector3 to = reusableTimedNodes[toIndex].Position;
+            if (IsNearSamePoint(from, to) || CrossesStaticKeepOut(from, to))
+            {
+                return;
+            }
+
+            if (!reusableTimedEdges[fromIndex].Contains(toIndex))
+            {
+                reusableTimedEdges[fromIndex].Add(toIndex);
+            }
+
+            if (!reusableTimedEdges[toIndex].Contains(fromIndex))
+            {
+                reusableTimedEdges[toIndex].Add(fromIndex);
+            }
+        }
+
+        private bool TryFindTimedRoute(
+            int robotId,
+            int taskId,
+            bool hasPayload,
+            int startNode,
+            int targetNode,
+            out List<TimedRouteSegment> segments)
+        {
+            segments = null;
+            float slotSec = Mathf.Max(0.05f, timedSlotSec);
+            int maxSlot = Mathf.CeilToInt(Mathf.Max(5f, timedPlanningHorizonSec) / slotSec);
+            int slotCount = maxSlot + 1;
+            float waitCost = hasPayload
+                ? Mathf.Max(0f, timedPayloadWaitCostSec)
+                : Mathf.Max(0f, timedWaitCostSec);
+            var records = new Dictionary<int, SearchRecord>(reusableTimedNodes.Count * 8);
+            reusableOpenStates.Clear();
+
+            int startKey = GetSearchKey(startNode, 0, slotCount);
+            records[startKey] = new SearchRecord
+            {
+                Cost = 0f,
+                PreviousKey = -1,
+                Closed = false
+            };
+            reusableOpenStates.Add(new SearchState(startNode, 0));
+
+            int goalKey = -1;
+            int guard = 0;
+            while (reusableOpenStates.Count > 0 && guard++ < 12000)
+            {
+                int bestOpenIndex = SelectBestOpenState(
+                    reusableOpenStates,
+                    records,
+                    targetNode,
+                    slotCount);
+                SearchState state = reusableOpenStates[bestOpenIndex];
+                reusableOpenStates.RemoveAt(bestOpenIndex);
+                int stateKey = GetSearchKey(state.NodeIndex, state.TimeSlot, slotCount);
+                SearchRecord record = records[stateKey];
+                if (record.Closed)
+                {
+                    continue;
+                }
+
+                record.Closed = true;
+                records[stateKey] = record;
+                if (state.NodeIndex == targetNode)
+                {
+                    goalKey = stateKey;
+                    break;
+                }
+
+                if (state.TimeSlot >= maxSlot)
+                {
+                    continue;
+                }
+
+                ExpandTimedWait(
+                    robotId,
+                    state,
+                    stateKey,
+                    record.Cost,
+                    waitCost,
+                    slotSec,
+                    maxSlot,
+                    slotCount,
+                    records);
+                ExpandTimedMoves(
+                    robotId,
+                    state,
+                    stateKey,
+                    record.Cost,
+                    slotSec,
+                    maxSlot,
+                    slotCount,
+                    records);
+            }
+
+            if (goalKey < 0)
+            {
+                return false;
+            }
+
+            segments = BuildTimedSegmentsFromSearch(
+                goalKey,
+                records,
+                slotSec,
+                slotCount);
+            return segments != null && segments.Count > 0;
+        }
+
+        private int SelectBestOpenState(
+            List<SearchState> openStates,
+            Dictionary<int, SearchRecord> records,
+            int targetNode,
+            int slotCount)
+        {
+            int bestIndex = 0;
+            float bestScore = float.MaxValue;
+            for (int i = 0; i < openStates.Count; i++)
+            {
+                SearchState state = openStates[i];
+                int key = GetSearchKey(state.NodeIndex, state.TimeSlot, slotCount);
+                if (!records.TryGetValue(key, out SearchRecord record))
+                {
+                    continue;
+                }
+
+                float heuristic = DistanceXZ(
+                    reusableTimedNodes[state.NodeIndex].Position,
+                    reusableTimedNodes[targetNode].Position) / Mathf.Max(0.1f, timedEstimatedBaseSpeed);
+                float score = record.Cost + heuristic;
+                if (score < bestScore)
+                {
+                    bestScore = score;
+                    bestIndex = i;
+                }
+            }
+
+            return bestIndex;
+        }
+
+        private void ExpandTimedWait(
+            int robotId,
+            SearchState state,
+            int stateKey,
+            float stateCost,
+            float waitCost,
+            float slotSec,
+            int maxSlot,
+            int slotCount,
+            Dictionary<int, SearchRecord> records)
+        {
+            int nextSlot = state.TimeSlot + 1;
+            if (nextSlot > maxSlot)
+            {
+                return;
+            }
+
+            Vector3 position = reusableTimedNodes[state.NodeIndex].Position;
+            float startTime = Time.time + state.TimeSlot * slotSec;
+            float endTime = Time.time + nextSlot * slotSec;
+            if (!IsTimedMoveAvailable(robotId, position, position, startTime, endTime))
+            {
+                return;
+            }
+
+            float nextCost = stateCost + slotSec + waitCost;
+            AddOrUpdateSearchState(
+                state.NodeIndex,
+                nextSlot,
+                stateKey,
+                nextCost,
+                slotCount,
+                records);
+        }
+
+        private void ExpandTimedMoves(
+            int robotId,
+            SearchState state,
+            int stateKey,
+            float stateCost,
+            float slotSec,
+            int maxSlot,
+            int slotCount,
+            Dictionary<int, SearchRecord> records)
+        {
+            Vector3 from = reusableTimedNodes[state.NodeIndex].Position;
+            List<int> edges = reusableTimedEdges[state.NodeIndex];
+            for (int i = 0; i < edges.Count; i++)
+            {
+                int nextNode = edges[i];
+                Vector3 to = reusableTimedNodes[nextNode].Position;
+                float travelTime = DistanceXZ(from, to) / Mathf.Max(0.1f, timedEstimatedBaseSpeed)
+                    + Mathf.Max(0f, timedMoveSettleSec);
+                int travelSlots = Mathf.Max(1, Mathf.CeilToInt(travelTime / slotSec));
+                int nextSlot = state.TimeSlot + travelSlots;
+                if (nextSlot > maxSlot)
+                {
+                    continue;
+                }
+
+                float startTime = Time.time + state.TimeSlot * slotSec;
+                float endTime = Time.time + nextSlot * slotSec;
+                if (!IsTimedMoveAvailable(robotId, from, to, startTime, endTime))
+                {
+                    continue;
+                }
+
+                float nextCost = stateCost + travelTime;
+                AddOrUpdateSearchState(
+                    nextNode,
+                    nextSlot,
+                    stateKey,
+                    nextCost,
+                    slotCount,
+                    records);
+            }
+        }
+
+        private void AddOrUpdateSearchState(
+            int nodeIndex,
+            int timeSlot,
+            int previousKey,
+            float cost,
+            int slotCount,
+            Dictionary<int, SearchRecord> records)
+        {
+            int key = GetSearchKey(nodeIndex, timeSlot, slotCount);
+            if (records.TryGetValue(key, out SearchRecord existing)
+                && (existing.Closed || existing.Cost <= cost))
+            {
+                return;
+            }
+
+            records[key] = new SearchRecord
+            {
+                Cost = cost,
+                PreviousKey = previousKey,
+                Closed = false
+            };
+            reusableOpenStates.Add(new SearchState(nodeIndex, timeSlot));
+        }
+
+        private List<TimedRouteSegment> BuildTimedSegmentsFromSearch(
+            int goalKey,
+            Dictionary<int, SearchRecord> records,
+            float slotSec,
+            int slotCount)
+        {
+            var keys = new List<int>();
+            int currentKey = goalKey;
+            while (currentKey >= 0)
+            {
+                keys.Add(currentKey);
+                if (!records.TryGetValue(currentKey, out SearchRecord record))
+                {
+                    return null;
+                }
+
+                currentKey = record.PreviousKey;
+            }
+
+            keys.Reverse();
+            var segments = new List<TimedRouteSegment>(keys.Count);
+            for (int i = 1; i < keys.Count; i++)
+            {
+                DecodeSearchKey(keys[i - 1], slotCount, out int previousNode, out int previousSlot);
+                DecodeSearchKey(keys[i], slotCount, out int node, out int slot);
+                Vector3 from = reusableTimedNodes[previousNode].Position;
+                Vector3 to = reusableTimedNodes[node].Position;
+                bool isWait = previousNode == node;
+                float startTime = Time.time + previousSlot * slotSec;
+                float endTime = Time.time + slot * slotSec;
+                AddTimedSegment(segments, from, to, startTime, endTime, isWait);
+            }
+
+            return segments;
+        }
+
+        private static void AddTimedSegment(
+            List<TimedRouteSegment> segments,
+            Vector3 from,
+            Vector3 to,
+            float startTime,
+            float endTime,
+            bool isWait)
+        {
+            if (endTime <= startTime)
+            {
+                return;
+            }
+
+            if (segments.Count > 0)
+            {
+                TimedRouteSegment previous = segments[segments.Count - 1];
+                if (previous.isWait
+                    && isWait
+                    && Vector3.Distance(previous.to, to) <= 0.05f)
+                {
+                    previous.endTime = endTime;
+                    return;
+                }
+            }
+
+            segments.Add(new TimedRouteSegment
+            {
+                from = from,
+                to = to,
+                startTime = startTime,
+                endTime = endTime,
+                isWait = isWait
+            });
+        }
+
+        private bool IsTimedMoveAvailable(
+            int robotId,
+            Vector3 from,
+            Vector3 to,
+            float startTime,
+            float endTime)
+        {
+            float buffer = Mathf.Max(0f, timedReservationBufferSec);
+            float bufferedStart = startTime - buffer;
+            float bufferedEnd = endTime + buffer;
+            float clearance = Mathf.Max(0.1f, segmentClearanceRadius);
+
+            for (int i = activeTimedReservations.Count - 1; i >= 0; i--)
+            {
+                TimedRouteReservationToken token = activeTimedReservations[i];
+                if (token == null || token.robotId == robotId)
+                {
+                    continue;
+                }
+
+                for (int j = 0; j < token.segments.Count; j++)
+                {
+                    TimedRouteSegment segment = token.segments[j];
+                    if (!IntervalsOverlap(
+                        bufferedStart,
+                        bufferedEnd,
+                        segment.startTime - buffer,
+                        segment.endTime + buffer))
+                    {
+                        continue;
+                    }
+
+                    if (SegmentDistanceXZ(from, to, segment.from, segment.to) <= clearance)
+                    {
+                        return false;
+                    }
+                }
+            }
+
+            for (int i = 0; i < activeReservations.Count; i++)
+            {
+                PathReservationToken reservation = activeReservations[i];
+                if (reservation == null || reservation.robotId == robotId)
+                {
+                    continue;
+                }
+
+                if (!IntervalsOverlap(
+                    bufferedStart,
+                    bufferedEnd,
+                    reservation.acquiredAt,
+                    reservation.expiresAt))
+                {
+                    continue;
+                }
+
+                if (SegmentDistanceXZ(from, to, reservation.from, reservation.to) <= clearance)
+                {
+                    return false;
+                }
+            }
+
+            return !ConflictsWithCurrentRobotPositions(robotId, from, to, startTime);
+        }
+
+        private bool ConflictsWithCurrentRobotPositions(
+            int robotId,
+            Vector3 from,
+            Vector3 to,
+            float startTime)
+        {
+            if (robotControllers == null)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < robotControllers.Length; i++)
+            {
+                IRobotController controller = robotControllers[i];
+                if (controller == null || controller.RobotId == robotId)
+                {
+                    continue;
+                }
+
+                IRobotAgent agent = GetRobotAgent(controller.RobotId);
+                bool isStationaryWork = agent != null && IsBoxWorkState(agent.State);
+                bool isImmediateCheck = startTime <= Time.time + Mathf.Max(0.5f, timedSlotSec * 2f);
+                if (!isStationaryWork && !isImmediateCheck)
+                {
+                    continue;
+                }
+
+                float clearance = isStationaryWork
+                    ? stationaryWorkClearanceRadius
+                    : hardStationaryClearanceRadius;
+                float distanceToPath = PointSegmentDistanceXZ(controller.Position, from, to);
+                if (distanceToPath <= clearance)
+                {
+                    if (distanceToPath > hardStationaryClearanceRadius
+                        && MovingAwayFromNearbyRobot(from, to, controller.Position))
+                    {
+                        continue;
+                    }
+
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private void PurgeStaleTimedReservations()
+        {
+            float now = Time.time;
+            for (int i = activeTimedReservations.Count - 1; i >= 0; i--)
+            {
+                TimedRouteReservationToken token = activeTimedReservations[i];
+                if (token == null || token.expiresAt <= now)
+                {
+                    activeTimedReservations.RemoveAt(i);
+                }
+            }
+        }
+
+        private static bool IntervalsOverlap(float leftStart, float leftEnd, float rightStart, float rightEnd)
+        {
+            return leftStart < rightEnd && rightStart < leftEnd;
+        }
+
+        private static int GetSearchKey(int nodeIndex, int timeSlot, int slotCount)
+        {
+            return nodeIndex * slotCount + timeSlot;
+        }
+
+        private static void DecodeSearchKey(int key, int slotCount, out int nodeIndex, out int timeSlot)
+        {
+            nodeIndex = key / slotCount;
+            timeSlot = key - nodeIndex * slotCount;
+        }
+
         public bool IsBasePathBlocked(
             int robotId,
             Vector3 from,
@@ -286,16 +1135,6 @@ namespace CPS.ICPBL.Student
                     float workerDistanceToPath = PointSegmentDistanceXZ(controller.Position, from, to);
                     if (targetBoxStationId == workingBoxStationId)
                     {
-                        if ((CurrentRobotHasSameBoxPriority(
-                            robotId,
-                            targetBoxStationId,
-                            controller.RobotId)
-                            || CurrentRobotHasTrafficPriority(robotId, controller.RobotId))
-                            && workerDistanceToPath > hardStationaryClearanceRadius)
-                        {
-                            continue;
-                        }
-
                         blockingRobotId = controller.RobotId;
                         waitForSameBox = true;
                         return true;
@@ -458,6 +1297,7 @@ namespace CPS.ICPBL.Student
             }
 
             PurgeStaleReservations();
+            PurgeStaleTimedReservations();
 
             if (CrossesStaticKeepOut(from, to))
             {
@@ -474,6 +1314,19 @@ namespace CPS.ICPBL.Student
                         to.x,
                         to.z));
                 return false;
+            }
+
+            if (enableTimedRoutePlanning)
+            {
+                float expectedEndTime = Time.time
+                    + DistanceXZ(from, to) / Mathf.Max(0.1f, timedEstimatedBaseSpeed)
+                    + Mathf.Max(0f, timedMoveSettleSec);
+                if (!IsTimedMoveAvailable(robotId, from, to, Time.time, expectedEndTime))
+                {
+                    blockingRobotId = StudentConstants.UnassignedRobotId;
+                    blockingTaskId = StudentConstants.NoTaskId;
+                    return false;
+                }
             }
 
             for (int i = 0; i < activeReservations.Count; i++)
@@ -610,6 +1463,16 @@ namespace CPS.ICPBL.Student
             detourDistance = Mathf.Max(4.5f, detourDistance);
             boxKeepOutRadius = Mathf.Max(2.25f, boxKeepOutRadius);
             boxBypassPadding = Mathf.Max(1.6f, boxBypassPadding);
+            timedSlotSec = Mathf.Max(0.05f, timedSlotSec);
+            timedPlanningHorizonSec = Mathf.Max(5f, timedPlanningHorizonSec);
+            timedEstimatedBaseSpeed = Mathf.Max(0.1f, timedEstimatedBaseSpeed);
+            timedReservationBufferSec = Mathf.Max(0f, timedReservationBufferSec);
+            timedMoveSettleSec = Mathf.Max(0f, timedMoveSettleSec);
+            timedGraphConnectDistance = Mathf.Max(0.5f, timedGraphConnectDistance);
+            timedGraphConnectCount = Mathf.Max(1, timedGraphConnectCount);
+            timedWaitCostSec = Mathf.Max(0f, timedWaitCostSec);
+            timedPayloadWaitCostSec = Mathf.Max(0f, timedPayloadWaitCostSec);
+            timedReservationStaleSec = Mathf.Max(1f, timedReservationStaleSec);
         }
 
         private bool IsCrossSideMove(int fromStationId, int toStationId)
@@ -793,11 +1656,15 @@ namespace CPS.ICPBL.Student
                     robotId,
                     targetBoxStationId,
                     other.RobotId);
-                bool currentHasTrafficPriority = CurrentRobotHasTrafficPriority(robotId, other.RobotId);
+                bool sameBoxMove = IsSameBoxMove(targetBoxStationId, other);
+                bool currentHasTrafficPriority =
+                    !sameBoxMove && CurrentRobotHasTrafficPriority(robotId, other.RobotId);
+                bool otherHasTrafficPriority =
+                    !sameBoxMove && OtherRobotHasTrafficPriority(robotId, other.RobotId);
                 bool otherHasPriority =
                     !currentHasTrafficPriority
                     && !currentHasSameBoxPriority
-                    && (OtherRobotHasTrafficPriority(robotId, other.RobotId)
+                    && (otherHasTrafficPriority
                     || OtherEmptyRobotHasPriority(robotId, other.RobotId)
                     || otherDistanceToCrossing + crossingPriorityMargin < myDistanceToCrossing
                     || (Mathf.Abs(otherDistanceToCrossing - myDistanceToCrossing) <= crossingPriorityMargin
@@ -1037,13 +1904,7 @@ namespace CPS.ICPBL.Student
                     continue;
                 }
 
-                if (CurrentRobotHasTrafficPriority(robotId, other.RobotId))
-                {
-                    continue;
-                }
-
-                bool otherHasPriority = OtherRobotHasTrafficPriority(robotId, other.RobotId)
-                    || mine == null
+                bool otherHasPriority = mine == null
                     || other.StartedAt + pathStartPriorityMarginSec < mine.StartedAt
                     || (Mathf.Abs(other.StartedAt - mine.StartedAt) <= pathStartPriorityMarginSec
                         && other.RobotId < robotId);
@@ -1089,16 +1950,6 @@ namespace CPS.ICPBL.Student
                 return false;
             }
 
-            if (CurrentRobotHasTrafficPriority(robotId, otherRobotId))
-            {
-                return true;
-            }
-
-            if (OtherRobotHasTrafficPriority(robotId, otherRobotId))
-            {
-                return false;
-            }
-
             if (mine.StartedAt + pathStartPriorityMarginSec < other.StartedAt)
             {
                 return true;
@@ -1110,6 +1961,29 @@ namespace CPS.ICPBL.Student
             }
 
             return robotId < otherRobotId;
+        }
+
+        private bool RequiresSegmentReservationFallbackCentralZone(
+            int fromStationId,
+            int toStationId)
+        {
+            return requireCentralZoneForBoxToCornerConveyors
+                && StudentConstants.IsBoxStationId(fromStationId)
+                && (toStationId == 5 || toStationId == 6);
+        }
+
+        private bool IsSameBoxMove(int targetBoxStationId, ActiveBasePath other)
+        {
+            if (!StudentConstants.IsBoxStationId(targetBoxStationId)
+                || other == null)
+            {
+                return false;
+            }
+
+            int otherTargetBoxStationId = GetTargetBoxStationId(
+                StudentConstants.NoStationId,
+                other.To);
+            return otherTargetBoxStationId == targetBoxStationId;
         }
 
         private static Vector3 GetBoxStationPosition(int stationId)

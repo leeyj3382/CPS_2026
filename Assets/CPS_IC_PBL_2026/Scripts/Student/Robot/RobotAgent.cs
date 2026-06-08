@@ -8,7 +8,7 @@ using UnityEngine;
 namespace CPS.ICPBL.Student
 {
     [DisallowMultipleComponent]
-    public sealed class RobotAgent : MonoBehaviour, IRobotAgent, IRobotStationTracker, IRobotPrepositioner
+    public sealed class RobotAgent : MonoBehaviour, IRobotAgent, IRobotStationTracker, IRobotPrepositioner, IRobotParkingController
     {
         [Header("Robot References")]
         [SerializeField] private int robotId = StudentConstants.RobotAId;
@@ -288,6 +288,24 @@ namespace CPS.ICPBL.Student
             return true;
         }
 
+        public bool TryParkAt(Vector3 position)
+        {
+            if (!CanAcceptTask)
+            {
+                return false;
+            }
+
+            ResolveSerializedReferences();
+            if (robotController == null)
+            {
+                LogWarning("Parking ignored because IRobotController is missing.");
+                return false;
+            }
+
+            activePreposition = StartCoroutine(RunParking(position));
+            return true;
+        }
+
         [ContextMenu("RobotAgent/Start Debug Mission")]
         private void StartDebugMission()
         {
@@ -413,6 +431,43 @@ namespace CPS.ICPBL.Student
             SetState(RobotRuntimeState.Idle);
         }
 
+        private IEnumerator RunParking(Vector3 position)
+        {
+            SetState(RobotRuntimeState.MovingToBox);
+            IPathTrafficManager trafficManager = pathPlanner as IPathTrafficManager;
+            trafficManager?.RegisterActiveBasePath(
+                robotId,
+                StudentConstants.NoTaskId,
+                robotController.Position,
+                position,
+                false);
+
+            robotController.MoveBaseTo(position);
+
+            float deadline = Time.time + Mathf.Max(0f, moveTimeoutSec);
+            while (robotController.IsBusy)
+            {
+                if (Time.time > deadline)
+                {
+                    trafficManager?.ClearActiveBasePath(robotId, StudentConstants.NoTaskId);
+                    SetState(RobotRuntimeState.Stuck);
+                    LogWarning(string.Format(
+                        "Parking timed out while moving to ({0:0.0},{1:0.0}).",
+                        position.x,
+                        position.z));
+                    activePreposition = null;
+                    yield break;
+                }
+
+                yield return null;
+            }
+
+            trafficManager?.ClearActiveBasePath(robotId, StudentConstants.NoTaskId);
+            currentStationId = StudentConstants.NoStationId;
+            activePreposition = null;
+            SetState(RobotRuntimeState.Idle);
+        }
+
         private void InvokeFinishedSafely(
             Action<MissionResult> onFinished,
             MissionResult result)
@@ -458,6 +513,7 @@ namespace CPS.ICPBL.Student
                 LockManager = lockManager,
                 PathPlanner = pathPlanner,
                 PathReservationManager = pathPlanner as IPathReservationManager,
+                PathTimeReservationManager = pathPlanner as IPathTimeReservationManager,
                 PathTrafficManager = pathPlanner as IPathTrafficManager,
                 OperatingStations = operatingStations,
                 TelemetryLogger = telemetryLogger,

@@ -30,6 +30,14 @@ namespace CPS.ICPBL.Student
 
         public string LastFailureReason { get; private set; }
 
+        private bool smoothAlignmentActive;
+        private float smoothAlignmentStartedAt;
+        private float smoothAlignmentDuration;
+        private Quaternion smoothAlignmentStartRotation = Quaternion.identity;
+        private PickableObject alignedObject;
+        private Vector3 attachPointLocalInHeldObject;
+        private bool hasAttachPointLocalInHeldObject;
+
         public IEnumerator WaitUntilGraspReady(float timeoutSec)
         {
             LastFailureReason = string.Empty;
@@ -108,6 +116,114 @@ namespace CPS.ICPBL.Student
             return true;
         }
 
+        public void BeginSmoothHeldObjectWorldGridAlignment(float durationSec)
+        {
+            if (gripper == null)
+            {
+                return;
+            }
+
+            PickableObject heldObject = gripper.HeldObject;
+            if (heldObject == null)
+            {
+                return;
+            }
+
+            Transform heldTransform = heldObject.transform;
+            smoothAlignmentStartRotation = heldTransform.rotation;
+            smoothAlignmentStartedAt = Time.time;
+            smoothAlignmentDuration = Mathf.Max(0f, durationSec);
+            smoothAlignmentActive = smoothAlignmentDuration > 0f
+                && Quaternion.Angle(smoothAlignmentStartRotation, Quaternion.identity) > 0.1f;
+
+            if (!smoothAlignmentActive)
+            {
+                ForceHeldObjectWorldGridAlignment();
+            }
+        }
+
+        public void MaintainHeldObjectWorldGridAlignment()
+        {
+            if (gripper == null || !gripper.IsHolding)
+            {
+                smoothAlignmentActive = false;
+                ClearAlignmentState();
+                return;
+            }
+
+            if (!smoothAlignmentActive)
+            {
+                AlignHeldObjectToWorldRotation(Quaternion.identity);
+                return;
+            }
+
+            float elapsed = Time.time - smoothAlignmentStartedAt;
+            float t = Mathf.Clamp01(elapsed / Mathf.Max(0.001f, smoothAlignmentDuration));
+            AlignHeldObjectToWorldRotation(Quaternion.Slerp(
+                smoothAlignmentStartRotation,
+                Quaternion.identity,
+                t));
+
+            if (t >= 1f)
+            {
+                smoothAlignmentActive = false;
+            }
+        }
+
+        private void ForceHeldObjectWorldGridAlignment()
+        {
+            smoothAlignmentActive = false;
+            AlignHeldObjectToWorldRotation(Quaternion.identity);
+        }
+
+        private void AlignHeldObjectToWorldRotation(Quaternion worldRotation)
+        {
+            if (gripper == null)
+            {
+                return;
+            }
+
+            PickableObject heldObject = gripper.HeldObject;
+            if (heldObject == null)
+            {
+                return;
+            }
+
+            Transform heldTransform = heldObject.transform;
+            Transform attachTransform = heldTransform.parent;
+            if (attachTransform == null)
+            {
+                heldTransform.rotation = worldRotation;
+                return;
+            }
+
+            CacheAttachPointLocalInHeldObject(heldObject, heldTransform, attachTransform);
+            heldTransform.rotation = worldRotation;
+            Vector3 attachedPointWorld = heldTransform.TransformPoint(attachPointLocalInHeldObject);
+            heldTransform.position += attachTransform.position - attachedPointWorld;
+        }
+
+        private void CacheAttachPointLocalInHeldObject(
+            PickableObject heldObject,
+            Transform heldTransform,
+            Transform attachTransform)
+        {
+            if (hasAttachPointLocalInHeldObject && alignedObject == heldObject)
+            {
+                return;
+            }
+
+            alignedObject = heldObject;
+            attachPointLocalInHeldObject = heldTransform.InverseTransformPoint(attachTransform.position);
+            hasAttachPointLocalInHeldObject = true;
+        }
+
+        private void ClearAlignmentState()
+        {
+            alignedObject = null;
+            hasAttachPointLocalInHeldObject = false;
+        }
+
         private void NormalizeHeldObjectForColorSensor()
         {
             PickableObject heldObject = gripper.HeldObject;
@@ -142,7 +258,9 @@ namespace CPS.ICPBL.Student
                 return;
             }
 
+            ForceHeldObjectWorldGridAlignment();
             gripper.Release();
+            ClearAlignmentState();
         }
     }
 }
