@@ -33,7 +33,7 @@ namespace CPS.ICPBL.Student
             StudentConstants.DefaultLockTimeoutSec;
         [SerializeField, Min(0.1f)] private float gripReadyTimeoutSec =
             StudentConstants.DefaultGripReadyTimeoutSec;
-        [SerializeField, Min(0f)] private float gripRetryWaitSec = 0.2f;
+        [SerializeField, Min(0f)] private float gripRetryWaitSec = 0.08f;
         [SerializeField, Min(0)] private int gripRetryCount = 1;
         [SerializeField, Min(0f)] private float colorRetryWaitSec = 0.1f;
         [SerializeField, Min(0)] private int colorRetryCount = 1;
@@ -101,8 +101,11 @@ namespace CPS.ICPBL.Student
         {
             moveTimeoutSec = Mathf.Max(0.1f, moveTimeoutSec);
             lockTimeoutSec = Mathf.Max(0.1f, lockTimeoutSec);
-            gripReadyTimeoutSec = Mathf.Max(0.1f, gripReadyTimeoutSec);
-            gripRetryWaitSec = Mathf.Max(0f, gripRetryWaitSec);
+            gripReadyTimeoutSec = Mathf.Clamp(
+                gripReadyTimeoutSec,
+                0.1f,
+                StudentConstants.DefaultGripReadyTimeoutSec);
+            gripRetryWaitSec = Mathf.Clamp(gripRetryWaitSec, 0f, 0.08f);
             gripRetryCount = Mathf.Max(0, gripRetryCount);
             colorRetryWaitSec = Mathf.Max(0f, colorRetryWaitSec);
             colorRetryCount = Mathf.Max(0, colorRetryCount);
@@ -529,8 +532,10 @@ namespace CPS.ICPBL.Student
             {
                 MoveTimeoutSec = moveTimeoutSec,
                 LockTimeoutSec = lockTimeoutSec,
-                GripReadyTimeoutSec = gripReadyTimeoutSec,
-                GripRetryWaitSec = gripRetryWaitSec,
+                GripReadyTimeoutSec = Mathf.Min(
+                    gripReadyTimeoutSec,
+                    StudentConstants.DefaultGripReadyTimeoutSec),
+                GripRetryWaitSec = Mathf.Min(gripRetryWaitSec, 0.08f),
                 GripRetryCount = gripRetryCount,
                 ColorRetryWaitSec = colorRetryWaitSec,
                 ColorRetryCount = colorRetryCount

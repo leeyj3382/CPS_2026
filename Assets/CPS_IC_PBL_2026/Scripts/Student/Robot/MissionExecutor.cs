@@ -35,7 +35,7 @@ namespace CPS.ICPBL.Student
             public float MoveTimeoutSec = StudentConstants.DefaultMoveTimeoutSec;
             public float LockTimeoutSec = StudentConstants.DefaultLockTimeoutSec;
             public float GripReadyTimeoutSec = StudentConstants.DefaultGripReadyTimeoutSec;
-            public float GripRetryWaitSec = 0.2f;
+            public float GripRetryWaitSec = 0.08f;
             public int GripRetryCount = 1;
             public float ColorRetryWaitSec = 0.1f;
             public int ColorRetryCount = 1;
@@ -44,18 +44,18 @@ namespace CPS.ICPBL.Student
             public float PayloadPathPriorityBonus = 1000f;
             public float TaskAgePriorityScale = 0.01f;
             public float PathYieldWaitSec = 2f;
-            public float PathYieldDistance = 4.5f;
-            public float PathYieldMoveTimeoutSec = 6f;
-            public float PathYieldCooldownSec = 0.8f;
-            public float EmptyPathYieldCooldownSec = 0.75f;
-            public int PathYieldMaxAttempts = 5;
+            public float PathYieldDistance = 3.0f;
+            public float PathYieldMoveTimeoutSec = 4f;
+            public float PathYieldCooldownSec = 0.55f;
+            public float EmptyPathYieldCooldownSec = 0.45f;
+            public int PathYieldMaxAttempts = 3;
             public float BasePathCheckIntervalSec = 0.05f;
             public float BasePathResumeCheckIntervalSec = 0.1f;
             public float BaseStopSettleSec = 0.05f;
             public float CloseBlockSettleSec = 0.08f;
             public float CloseBlockSettleDistance = 2.6f;
-            public float BaseBlockedEscapeSec = 2f;
-            public float EmptyBaseBlockedEscapeSec = 1.6f;
+            public float BaseBlockedEscapeSec = 1.4f;
+            public float EmptyBaseBlockedEscapeSec = 0.9f;
             public bool EnableDestinationBoxStaging = true;
             public bool EnableSameBoxFarStaging = true;
             public float SameBoxFarStagingMinDistance = 7.5f;
@@ -65,7 +65,7 @@ namespace CPS.ICPBL.Student
             public bool EnableConveyorFiveSixChokeGate = true;
             public bool EnableBoxExitClearance = true;
             public float BoxExitClearanceDistance = 2.2f;
-            public float EmergencyYieldDistance = 2.2f;
+            public float EmergencyYieldDistance = 1.8f;
             public float EmergencyYieldMaxDistanceRatio = 2.5f;
             public float EmergencyYieldMaxExtraDistance = 8f;
         }
@@ -3091,7 +3091,7 @@ namespace CPS.ICPBL.Student
             Vector3 from,
             Vector3 originalTarget)
         {
-            float distance = Mathf.Max(0.5f, settings.PathYieldDistance);
+            float distance = Mathf.Clamp(settings.PathYieldDistance, 1.5f, 3.0f);
             Vector3 direction = FlattenXZ(originalTarget - from);
             if (direction.sqrMagnitude <= 0.0001f)
             {
@@ -3106,16 +3106,16 @@ namespace CPS.ICPBL.Student
             }
 
             Vector3 backward = -direction;
-            Vector3 diagonalA = (perpendicular + backward).normalized;
-            Vector3 diagonalB = (-perpendicular + backward).normalized;
+            Vector3 diagonalA = (perpendicular + backward * 0.5f).normalized;
+            Vector3 diagonalB = (-perpendicular + backward * 0.5f).normalized;
 
             return new[]
             {
                 ClampYieldCandidate(from + perpendicular * distance),
                 ClampYieldCandidate(from - perpendicular * distance),
-                ClampYieldCandidate(from + backward * distance),
                 ClampYieldCandidate(from + diagonalA * distance),
-                ClampYieldCandidate(from + diagonalB * distance)
+                ClampYieldCandidate(from + diagonalB * distance),
+                ClampYieldCandidate(from + backward * Mathf.Min(distance, 1.8f))
             };
         }
 
@@ -3127,8 +3127,8 @@ namespace CPS.ICPBL.Student
             emergencyYieldCandidates.Clear();
             AddEmergencyBoxYieldCandidates(from, originalTarget);
 
-            float nearDistance = Mathf.Max(0.5f, settings.EmergencyYieldDistance);
-            float farDistance = Mathf.Max(nearDistance, settings.PathYieldDistance);
+            float nearDistance = Mathf.Clamp(settings.EmergencyYieldDistance, 1.2f, 2.0f);
+            float farDistance = Mathf.Clamp(settings.PathYieldDistance, nearDistance, 3.0f);
             Vector3 direction = FlattenXZ(originalTarget - from);
             if (direction.sqrMagnitude <= 0.0001f)
             {
@@ -3143,19 +3143,18 @@ namespace CPS.ICPBL.Student
             }
 
             Vector3 backward = -direction;
-            Vector3 diagonalA = (perpendicular + backward).normalized;
-            Vector3 diagonalB = (-perpendicular + backward).normalized;
+            Vector3 diagonalA = (perpendicular + backward * 0.5f).normalized;
+            Vector3 diagonalB = (-perpendicular + backward * 0.5f).normalized;
 
             AddEmergencyYieldCandidate(from + perpendicular * nearDistance);
             AddEmergencyYieldCandidate(from - perpendicular * nearDistance);
-            AddEmergencyYieldCandidate(from + backward * nearDistance);
             AddEmergencyYieldCandidate(from + diagonalA * nearDistance);
             AddEmergencyYieldCandidate(from + diagonalB * nearDistance);
             AddEmergencyYieldCandidate(from + perpendicular * farDistance);
             AddEmergencyYieldCandidate(from - perpendicular * farDistance);
-            AddEmergencyYieldCandidate(from + backward * farDistance);
             AddEmergencyYieldCandidate(from + diagonalA * farDistance);
             AddEmergencyYieldCandidate(from + diagonalB * farDistance);
+            AddEmergencyYieldCandidate(from + backward * Mathf.Min(farDistance, 1.8f));
 
             return emergencyYieldCandidates;
         }

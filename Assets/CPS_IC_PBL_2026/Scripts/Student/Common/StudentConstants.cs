@@ -25,10 +25,10 @@ namespace CPS.ICPBL.Student
         public const float DefaultMissionTimeoutSec = 60f;
         public const float DefaultMoveTimeoutSec = 15f;
         public const float DefaultLockTimeoutSec = 5f;
-        public const float DefaultGripReadyTimeoutSec = 3f;
-        public const float DefaultArmMoveDurationSec = 0.4f;
-        public const float DefaultHeldObjectAlignDurationSec = 0.2f;
-        public const float DefaultPlaceSettleBeforeReleaseSec = 0.05f;
+        public const float DefaultGripReadyTimeoutSec = 1.0f;
+        public const float DefaultArmMoveDurationSec = 0.22f;
+        public const float DefaultHeldObjectAlignDurationSec = 0.06f;
+        public const float DefaultPlaceSettleBeforeReleaseSec = 0.01f;
 
         public const float ColorReliableThreshold = 0.15f;
         public const float ColorAmbiguousDistanceDelta = 0.05f;

@@ -99,8 +99,8 @@ namespace CPS.ICPBL.Student
 
         private void OnValidate()
         {
-            conveyorArmMoveDuration = Mathf.Max(MinArmMoveDuration, conveyorArmMoveDuration);
-            boxArmMoveDuration = Mathf.Max(MinArmMoveDuration, boxArmMoveDuration);
+            conveyorArmMoveDuration = ClampArmMoveDuration(conveyorArmMoveDuration);
+            boxArmMoveDuration = ClampArmMoveDuration(boxArmMoveDuration);
             gizmoRadius = Mathf.Max(0.01f, gizmoRadius);
             initialized = false;
         }
@@ -129,7 +129,7 @@ namespace CPS.ICPBL.Student
                     approachPos = ApplyVerticalOffset(anchor, conveyorApproachOffset),
                     actionPos = ApplyVerticalOffset(anchor, conveyorActionOffset),
                     retractPos = ApplyVerticalOffset(anchor, conveyorRetractOffset),
-                    armMoveDuration = Mathf.Max(MinArmMoveDuration, conveyorArmMoveDuration)
+                    armMoveDuration = ClampArmMoveDuration(conveyorArmMoveDuration)
                 };
             }
         }
@@ -149,7 +149,7 @@ namespace CPS.ICPBL.Student
                 approachPos = ApplyVerticalOffset(anchor, boxApproachOffset),
                 actionPos = ApplyVerticalOffset(anchor, boxActionOffset),
                 retractPos = ApplyVerticalOffset(anchor, boxRetractOffset),
-                armMoveDuration = Mathf.Max(MinArmMoveDuration, boxArmMoveDuration)
+                armMoveDuration = ClampArmMoveDuration(boxArmMoveDuration)
             };
         }
 
@@ -237,8 +237,16 @@ namespace CPS.ICPBL.Student
             }
 
             normalized.stationId = stationId;
-            normalized.armMoveDuration = Mathf.Max(MinArmMoveDuration, normalized.armMoveDuration);
+            normalized.armMoveDuration = ClampArmMoveDuration(normalized.armMoveDuration);
             return normalized;
+        }
+
+        private static float ClampArmMoveDuration(float durationSec)
+        {
+            return Mathf.Clamp(
+                durationSec,
+                MinArmMoveDuration,
+                StudentConstants.DefaultArmMoveDurationSec);
         }
 
         private static StationPose ClonePose(StationPose pose)

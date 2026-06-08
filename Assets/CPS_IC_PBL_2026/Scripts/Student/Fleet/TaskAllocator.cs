@@ -14,8 +14,8 @@ namespace CPS.ICPBL.Student
         private const float QueuePressureLeadPerItemSec = 1.25f;
         private const float FullQueueExtraLeadSec = 1.5f;
         private const float TravelCostPerMeterSec = 0.35f;
-        private const float PreferredAreaPenaltySec = 4f;
-        private const float WorkStealDeadlineAdvantageSec = 8f;
+        private const float PreferredAreaPenaltySec = 3f;
+        private const float WorkStealDeadlineAdvantageSec = 6f;
 
         private readonly OperatingStations operatingStations;
 
@@ -183,12 +183,12 @@ namespace CPS.ICPBL.Student
         {
             if (robotId == StudentConstants.RobotAId)
             {
-                return conveyorId >= 1 && conveyorId <= 3;
+                return conveyorId >= 1 && conveyorId <= 5;
             }
 
             if (robotId == StudentConstants.RobotBId)
             {
-                return conveyorId >= 4 && conveyorId <= 10;
+                return conveyorId >= 6 && conveyorId <= 10;
             }
 
             return false;

@@ -64,24 +64,24 @@ namespace CPS.ICPBL.Student
 
         [Header("Base Segment Reservation")]
         [SerializeField] private bool enableSegmentReservation = true;
-        [SerializeField, Min(0.1f)] private float segmentClearanceRadius = 2.6f;
-        [SerializeField, Min(0.1f)] private float stationaryClearanceRadius = 2.5f;
-        [SerializeField, Min(0.1f)] private float hardSegmentClearanceRadius = 1.8f;
-        [SerializeField, Min(0.1f)] private float hardStationaryClearanceRadius = 1.8f;
+        [SerializeField, Min(0.1f)] private float segmentClearanceRadius = 3.0f;
+        [SerializeField, Min(0.1f)] private float stationaryClearanceRadius = 2.9f;
+        [SerializeField, Min(0.1f)] private float hardSegmentClearanceRadius = 2.05f;
+        [SerializeField, Min(0.1f)] private float hardStationaryClearanceRadius = 2.05f;
         [SerializeField, Min(0.1f)] private float reservationStaleSec = 8f;
 
         [Header("Dynamic Conflict Timing")]
         [SerializeField] private bool enableTemporalConflictCheck = true;
         [SerializeField, Min(0.1f)] private float estimatedBaseSpeed = 7.5f;
-        [SerializeField, Min(0f)] private float conflictTimeWindowSec = 0.9f;
-        [SerializeField, Min(0.1f)] private float movingBlockDistance = 2.35f;
-        [SerializeField, Min(0.1f)] private float movingResumeDistance = 2.8f;
-        [SerializeField, Min(0.1f)] private float stationaryWorkClearanceRadius = 3.2f;
-        [SerializeField, Min(0f)] private float ignoreBehindDistance = 0.35f;
+        [SerializeField, Min(0f)] private float conflictTimeWindowSec = 1.15f;
+        [SerializeField, Min(0.1f)] private float movingBlockDistance = 2.75f;
+        [SerializeField, Min(0.1f)] private float movingResumeDistance = 3.2f;
+        [SerializeField, Min(0.1f)] private float stationaryWorkClearanceRadius = 3.6f;
+        [SerializeField, Min(0f)] private float ignoreBehindDistance = 0.2f;
         [SerializeField] private bool stopImmediatelyForLowerPriorityCrossing = true;
-        [SerializeField, Min(0.1f)] private float crossingHoldDistance = 3.0f;
-        [SerializeField, Min(0f)] private float crossingPriorityMargin = 0.8f;
-        [SerializeField, Min(0f)] private float pathStartPriorityMarginSec = 0.15f;
+        [SerializeField, Min(0.1f)] private float crossingHoldDistance = 3.8f;
+        [SerializeField, Min(0f)] private float crossingPriorityMargin = 1.0f;
+        [SerializeField, Min(0f)] private float pathStartPriorityMarginSec = 0.3f;
         [SerializeField, Min(0.1f)] private float activePathStaleSec = 45f;
 
         [Header("Lane Routing")]
@@ -91,7 +91,7 @@ namespace CPS.ICPBL.Student
         [SerializeField] private float lowerLaneZ = -7.4f;
         [SerializeField] private float upperLaneZ = 9.3f;
         [SerializeField] private float waypointMergeDistance = 0.6f;
-        [SerializeField] private float detourDistance = 4.5f;
+        [SerializeField] private float detourDistance = 3.0f;
         [SerializeField] private float worldMinX = -9.5f;
         [SerializeField] private float worldMaxX = 10.5f;
         [SerializeField] private float worldMinZ = -8.0f;
@@ -235,7 +235,7 @@ namespace CPS.ICPBL.Student
         {
             reusableYieldCandidates.Clear();
 
-            float distance = Mathf.Max(0.5f, detourDistance);
+            float distance = Mathf.Clamp(detourDistance, 1.5f, 3.0f);
             Vector3 direction = FlattenXZ(originalTarget - from);
             if (direction.sqrMagnitude <= 0.0001f)
             {
@@ -250,17 +250,17 @@ namespace CPS.ICPBL.Student
             }
 
             Vector3 backward = -direction;
-            Vector3 diagonalA = (perpendicular + backward).normalized;
-            Vector3 diagonalB = (-perpendicular + backward).normalized;
+            Vector3 diagonalA = (perpendicular + backward * 0.5f).normalized;
+            Vector3 diagonalB = (-perpendicular + backward * 0.5f).normalized;
             float laneX = GetLaneX(robotId, StudentConstants.NoStationId);
 
             AddBoxBypassCandidates(from, originalTarget);
             AddYieldCandidate(from + perpendicular * distance);
             AddYieldCandidate(from - perpendicular * distance);
-            AddYieldCandidate(new Vector3(laneX, from.y, from.z));
-            AddYieldCandidate(from + backward * distance);
             AddYieldCandidate(from + diagonalA * distance);
             AddYieldCandidate(from + diagonalB * distance);
+            AddYieldCandidate(new Vector3(laneX, from.y, from.z));
+            AddYieldCandidate(from + backward * Mathf.Min(distance, 1.8f));
 
             return reusableYieldCandidates;
         }
@@ -1158,6 +1158,21 @@ namespace CPS.ICPBL.Student
                 }
 
                 Vector2 other = ToXZ(controller.Position);
+                IRobotAgent otherAgent = GetRobotAgent(controller.RobotId);
+                bool otherIsActive = controller.IsBusy
+                    || (otherAgent != null && IsActiveBlockingState(otherAgent.State));
+                float startDistanceToOther = DistanceXZ(from, controller.Position);
+                float startBlockDistance = otherIsActive
+                    ? movingResumeDistance
+                    : hardStationaryClearanceRadius;
+                if (startDistanceToOther <= startBlockDistance
+                    && !MovingAwayFromNearbyRobot(from, to, controller.Position))
+                {
+                    blockingRobotId = controller.RobotId;
+                    preferDetour = startDistanceToOther > hardStationaryClearanceRadius;
+                    return true;
+                }
+
                 float progress = Vector2.Dot(other - start, path) / pathLengthSqr;
                 if (progress <= 0f || progress > 1f)
                 {
@@ -1171,9 +1186,9 @@ namespace CPS.ICPBL.Student
                 }
 
                 float distanceToPath = PointSegmentDistance(other, start, end);
-                float threshold = controller.IsBusy
+                float threshold = otherIsActive
                     ? movingBlockDistance
-                    : stationaryWorkClearanceRadius;
+                    : hardStationaryClearanceRadius;
                 if (distanceToPath <= threshold)
                 {
                     blockingRobotId = controller.RobotId;
@@ -1407,27 +1422,28 @@ namespace CPS.ICPBL.Student
                 robotBMaxConveyor,
                 robotBMinConveyor,
                 StudentConstants.MaxConveyorId);
-            segmentClearanceRadius = Mathf.Max(2.6f, segmentClearanceRadius);
-            stationaryClearanceRadius = Mathf.Max(2.5f, stationaryClearanceRadius);
+            segmentClearanceRadius = Mathf.Max(3.0f, segmentClearanceRadius);
+            stationaryClearanceRadius = Mathf.Max(2.9f, stationaryClearanceRadius);
             hardSegmentClearanceRadius = Mathf.Min(
-                Mathf.Max(1.8f, hardSegmentClearanceRadius),
+                Mathf.Max(2.05f, hardSegmentClearanceRadius),
                 segmentClearanceRadius);
             hardStationaryClearanceRadius = Mathf.Min(
-                Mathf.Max(1.8f, hardStationaryClearanceRadius),
+                Mathf.Max(2.05f, hardStationaryClearanceRadius),
                 stationaryClearanceRadius);
             reservationStaleSec = Mathf.Max(0.1f, reservationStaleSec);
             estimatedBaseSpeed = Mathf.Max(0.1f, estimatedBaseSpeed);
-            conflictTimeWindowSec = Mathf.Max(0f, conflictTimeWindowSec);
-            movingBlockDistance = Mathf.Max(2.35f, movingBlockDistance);
-            movingResumeDistance = Mathf.Max(Mathf.Max(2.8f, movingBlockDistance), movingResumeDistance);
+            conflictTimeWindowSec = Mathf.Max(1.15f, conflictTimeWindowSec);
+            movingBlockDistance = Mathf.Max(2.75f, movingBlockDistance);
+            movingResumeDistance = Mathf.Max(Mathf.Max(3.2f, movingBlockDistance), movingResumeDistance);
             stationaryWorkClearanceRadius = Mathf.Max(movingResumeDistance, stationaryWorkClearanceRadius);
-            ignoreBehindDistance = Mathf.Max(0f, ignoreBehindDistance);
-            crossingHoldDistance = Mathf.Max(3.0f, crossingHoldDistance);
-            crossingPriorityMargin = Mathf.Max(0.8f, crossingPriorityMargin);
-            pathStartPriorityMarginSec = Mathf.Max(0f, pathStartPriorityMarginSec);
+            stationaryWorkClearanceRadius = Mathf.Max(3.6f, stationaryWorkClearanceRadius);
+            ignoreBehindDistance = Mathf.Max(0f, Mathf.Min(0.2f, ignoreBehindDistance));
+            crossingHoldDistance = Mathf.Max(3.8f, crossingHoldDistance);
+            crossingPriorityMargin = Mathf.Max(1.0f, crossingPriorityMargin);
+            pathStartPriorityMarginSec = Mathf.Max(0.3f, pathStartPriorityMarginSec);
             activePathStaleSec = Mathf.Max(0.1f, activePathStaleSec);
             waypointMergeDistance = Mathf.Max(0.1f, waypointMergeDistance);
-            detourDistance = Mathf.Max(4.5f, detourDistance);
+            detourDistance = Mathf.Clamp(detourDistance, 1.5f, 3.0f);
             boxKeepOutRadius = Mathf.Max(2.25f, boxKeepOutRadius);
             boxBypassPadding = Mathf.Max(1.6f, boxBypassPadding);
             timedSlotSec = Mathf.Max(0.05f, timedSlotSec);
@@ -1509,7 +1525,10 @@ namespace CPS.ICPBL.Student
                     return true;
                 }
 
-                if (controller.IsBusy && distanceToPath > hardStationaryClearanceRadius)
+                float busyClearanceRadius = Mathf.Max(
+                    movingBlockDistance,
+                    hardStationaryClearanceRadius);
+                if (controller.IsBusy && distanceToPath > busyClearanceRadius)
                 {
                     continue;
                 }
@@ -1527,9 +1546,12 @@ namespace CPS.ICPBL.Student
                     continue;
                 }
 
-                float clearanceRadius = controller.IsBusy
+                IRobotAgent otherAgent = GetRobotAgent(controller.RobotId);
+                bool otherIsActive = controller.IsBusy
+                    || (otherAgent != null && IsActiveBlockingState(otherAgent.State));
+                float clearanceRadius = otherIsActive
                     ? stationaryClearanceRadius
-                    : stationaryWorkClearanceRadius;
+                    : hardStationaryClearanceRadius;
                 if (distanceToPath <= clearanceRadius)
                 {
                     blockingRobotId = controller.RobotId;
@@ -1776,6 +1798,13 @@ namespace CPS.ICPBL.Student
         {
             return state == RobotRuntimeState.Picking
                 || state == RobotRuntimeState.Retracting;
+        }
+
+        private static bool IsActiveBlockingState(RobotRuntimeState state)
+        {
+            return state != RobotRuntimeState.Idle
+                && state != RobotRuntimeState.Completed
+                && state != RobotRuntimeState.Failed;
         }
 
         private IRobotAgent GetRobotAgent(int robotId)

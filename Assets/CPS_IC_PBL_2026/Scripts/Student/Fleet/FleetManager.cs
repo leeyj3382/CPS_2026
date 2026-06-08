@@ -33,10 +33,11 @@ namespace CPS.ICPBL.Student
         [Header("Terminal Parking")]
         [SerializeField] private bool enableTerminalParking = true;
         [SerializeField, Min(1)] private int terminalParkingCompletionIndex = 63;
-        [SerializeField] private Vector3 terminalParkingPosition = new Vector3(6.2f, 0f, -5.2f);
+        [SerializeField] private Vector3 terminalParkingPosition = new Vector3(-9.6f, 0f, -7.4f);
         private static readonly Vector3 SafeTerminalParkingPosition =
-            new Vector3(6.2f, 0f, -5.2f);
+            new Vector3(-9.6f, 0f, -7.4f);
         private const float TerminalParkingCriticalPathClearance = 4.5f;
+        private const int LatestSafeTerminalParkingCompletionIndex = 63;
 
         private readonly HashSet<int> reservedConveyorIds = new HashSet<int>();
         private readonly Dictionary<int, float> lastAssignedAtByConveyor =
@@ -729,10 +730,13 @@ namespace CPS.ICPBL.Student
 
         private void TryRequestTerminalParking(WorkTask task)
         {
+            int parkingCompletionIndex = Mathf.Min(
+                terminalParkingCompletionIndex,
+                LatestSafeTerminalParkingCompletionIndex);
             if (!enableTerminalParking
                 || terminalParkingRequested
                 || task == null
-                || successfulMissionCompletionCount != terminalParkingCompletionIndex)
+                || successfulMissionCompletionCount < parkingCompletionIndex)
             {
                 return;
             }
@@ -771,7 +775,8 @@ namespace CPS.ICPBL.Student
         {
             Vector3 configured = terminalParkingPosition;
             configured.y = 0f;
-            if (IsTerminalParkingPositionClear(configured))
+            if (IsTerminalParkingCornerPosition(configured)
+                && IsTerminalParkingPositionClear(configured))
             {
                 return configured;
             }
@@ -783,6 +788,11 @@ namespace CPS.ICPBL.Student
                 SafeTerminalParkingPosition.x,
                 SafeTerminalParkingPosition.z));
             return SafeTerminalParkingPosition;
+        }
+
+        private static bool IsTerminalParkingCornerPosition(Vector3 position)
+        {
+            return Mathf.Abs(position.x) >= 8.8f && position.z <= -6.8f;
         }
 
         private static bool IsTerminalParkingPositionClear(Vector3 position)
