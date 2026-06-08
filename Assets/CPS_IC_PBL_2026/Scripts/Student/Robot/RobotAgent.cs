@@ -37,6 +37,9 @@ namespace CPS.ICPBL.Student
         [SerializeField, Min(0)] private int gripRetryCount = 1;
         [SerializeField, Min(0f)] private float colorRetryWaitSec = 0.1f;
         [SerializeField, Min(0)] private int colorRetryCount = 1;
+        [SerializeField, Min(0.01f)] private float postPlaceArmRaiseDurationSec =
+            StudentConstants.DefaultArmMoveDurationSec;
+        [SerializeField, Min(0.5f)] private float postPlaceArmReadyMinHeight = 1.75f;
 
         [Header("Debug")]
         [SerializeField] private bool logWithoutTelemetry = true;
@@ -106,6 +109,8 @@ namespace CPS.ICPBL.Student
             gripRetryCount = Mathf.Max(0, gripRetryCount);
             colorRetryWaitSec = Mathf.Max(0f, colorRetryWaitSec);
             colorRetryCount = Mathf.Max(0, colorRetryCount);
+            postPlaceArmRaiseDurationSec = Mathf.Max(0.01f, postPlaceArmRaiseDurationSec);
+            postPlaceArmReadyMinHeight = Mathf.Max(0.5f, postPlaceArmReadyMinHeight);
             debugConveyorId = Mathf.Clamp(
                 debugConveyorId,
                 StudentConstants.MinConveyorId,
@@ -533,7 +538,9 @@ namespace CPS.ICPBL.Student
                 GripRetryWaitSec = gripRetryWaitSec,
                 GripRetryCount = gripRetryCount,
                 ColorRetryWaitSec = colorRetryWaitSec,
-                ColorRetryCount = colorRetryCount
+                ColorRetryCount = colorRetryCount,
+                PostPlaceArmRaiseDurationSec = postPlaceArmRaiseDurationSec,
+                PostPlaceArmReadyMinHeight = postPlaceArmReadyMinHeight
             };
         }
 

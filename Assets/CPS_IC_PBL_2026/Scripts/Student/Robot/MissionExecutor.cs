@@ -68,6 +68,8 @@ namespace CPS.ICPBL.Student
             public float EmergencyYieldDistance = 2.2f;
             public float EmergencyYieldMaxDistanceRatio = 2.5f;
             public float EmergencyYieldMaxExtraDistance = 8f;
+            public float PostPlaceArmRaiseDurationSec = StudentConstants.DefaultArmMoveDurationSec;
+            public float PostPlaceArmReadyMinHeight = 1.75f;
         }
 
         private sealed class MissionContext
@@ -3784,6 +3786,12 @@ namespace CPS.ICPBL.Student
                 yield break;
             }
 
+            yield return MoveArmToPostPlaceReadyPosition(context);
+            if (context.Failed)
+            {
+                yield break;
+            }
+
             ReleaseKey(context, armKey);
         }
 
@@ -3805,6 +3813,16 @@ namespace CPS.ICPBL.Student
             return retractPosition;
         }
 
+        private Vector3 GetPostPlaceReadyPosition(MissionContext context)
+        {
+            Vector3 readyPosition = GetSafePlaceRetractPosition(context);
+            readyPosition.y = Mathf.Max(
+                readyPosition.y,
+                context.ReservedSlot.placePos.y + 0.85f,
+                settings.PostPlaceArmReadyMinHeight);
+            return readyPosition;
+        }
+
         private IEnumerator MoveArmTo(
             MissionContext context,
             Vector3 worldPos,
@@ -3816,6 +3834,16 @@ namespace CPS.ICPBL.Student
                 Quaternion.identity,
                 Mathf.Max(0.01f, durationSec));
             yield return WaitForControllerIdle(context, settings.MoveTimeoutSec, label);
+        }
+
+        private IEnumerator MoveArmToPostPlaceReadyPosition(MissionContext context)
+        {
+            dependencies.SetState?.Invoke(RobotRuntimeState.Retracting);
+            yield return MoveArmTo(
+                context,
+                GetPostPlaceReadyPosition(context),
+                settings.PostPlaceArmRaiseDurationSec,
+                "post-place ready lift");
         }
 
         private IEnumerator WaitForControllerIdle(
