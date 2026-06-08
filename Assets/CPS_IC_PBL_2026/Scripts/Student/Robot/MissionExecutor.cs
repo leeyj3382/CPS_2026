@@ -47,11 +47,15 @@ namespace CPS.ICPBL.Student
             public float PathYieldDistance = 4.5f;
             public float PathYieldMoveTimeoutSec = 6f;
             public float PathYieldCooldownSec = 0.8f;
+            public float EmptyPathYieldCooldownSec = 0.75f;
             public int PathYieldMaxAttempts = 5;
             public float BasePathCheckIntervalSec = 0.05f;
             public float BasePathResumeCheckIntervalSec = 0.1f;
             public float BaseStopSettleSec = 0.05f;
+            public float CloseBlockSettleSec = 0.08f;
+            public float CloseBlockSettleDistance = 2.6f;
             public float BaseBlockedEscapeSec = 2f;
+            public float EmptyBaseBlockedEscapeSec = 1.6f;
             public bool EnableDestinationBoxStaging = true;
             public bool EnableSameBoxFarStaging = true;
             public float SameBoxFarStagingMinDistance = 7.5f;
@@ -111,6 +115,8 @@ namespace CPS.ICPBL.Student
         private readonly List<Vector3> emergencyYieldCandidates = new List<Vector3>(16);
         private readonly List<Vector3> boxApproachWaitCandidates = new List<Vector3>(8);
         private readonly List<Vector3> boxApproachWaitRoute = new List<Vector3>(8);
+        private readonly List<Vector3> selectedBoxApproachWaitRoute = new List<Vector3>(8);
+        private readonly List<Vector3> ownerBoxDepartureRoute = new List<Vector3>(6);
         private readonly List<Vector3> boxExitClearanceCandidates = new List<Vector3>(6);
         private static readonly Dictionary<int, MissionContext> ActiveContextsByRobot =
             new Dictionary<int, MissionContext>();
@@ -723,7 +729,12 @@ namespace CPS.ICPBL.Student
                 return boxStationPosition;
             }
 
-            Vector3 fallback = boxExitClearanceCandidates[0];
+            Vector3 bestReservedCandidate = Vector3.zero;
+            float bestReservedScore = float.PositiveInfinity;
+            bool hasReservedCandidate = false;
+            Vector3 bestReservationFallback = Vector3.zero;
+            float bestReservationFallbackScore = float.PositiveInfinity;
+            bool hasReservationFallback = false;
             for (int i = 0; i < boxExitClearanceCandidates.Count; i++)
             {
                 Vector3 candidate = boxExitClearanceCandidates[i];
@@ -732,36 +743,89 @@ namespace CPS.ICPBL.Student
                     continue;
                 }
 
-                if (IsBoxExitClearanceCandidateAvailable(context, candidate))
+                if (!IsBoxExitClearancePathClear(context, candidate))
                 {
-                    return candidate;
+                    continue;
+                }
+
+                float score = ScoreBoxExitClearanceCandidate(
+                    context,
+                    candidate,
+                    boxStationPosition);
+                if (TryProbeBoxExitClearanceReservation(context, candidate))
+                {
+                    if (!hasReservedCandidate || score < bestReservedScore)
+                    {
+                        bestReservedCandidate = candidate;
+                        bestReservedScore = score;
+                        hasReservedCandidate = true;
+                    }
+
+                    continue;
+                }
+
+                if (!hasReservationFallback || score < bestReservationFallbackScore)
+                {
+                    bestReservationFallback = candidate;
+                    bestReservationFallbackScore = score;
+                    hasReservationFallback = true;
                 }
             }
 
-            return fallback;
+            if (hasReservedCandidate)
+            {
+                return bestReservedCandidate;
+            }
+
+            if (hasReservationFallback)
+            {
+                return bestReservationFallback;
+            }
+
+            return GetConservativeBoxExitClearanceFallback(context, boxStationPosition);
         }
 
-        private bool IsBoxExitClearanceCandidateAvailable(
+        private Vector3 GetConservativeBoxExitClearanceFallback(
+            MissionContext context,
+            Vector3 boxStationPosition)
+        {
+            float distance = Mathf.Max(0.2f, settings.BoxExitClearanceDistance);
+            if (context.Result.destinationStationId == StudentConstants.NormalBoxStationId)
+            {
+                return ClampWorldPosition(boxStationPosition + Vector3.forward * distance);
+            }
+
+            if (context.Result.destinationStationId == StudentConstants.AbnormalBoxStationId)
+            {
+                return ClampWorldPosition(boxStationPosition + Vector3.left * distance);
+            }
+
+            return ClampWorldPosition(boxStationPosition);
+        }
+
+        private bool IsBoxExitClearancePathClear(
             MissionContext context,
             Vector3 candidate)
         {
-            Vector3 from = dependencies.Controller.Position;
-            if (IsPathBlockedByRobot(
+            return !IsPathBlockedByRobot(
                 context,
                 StudentConstants.NoStationId,
                 candidate,
                 out _,
                 out _,
-                out _))
-            {
-                return false;
-            }
+                out _);
+        }
 
+        private bool TryProbeBoxExitClearanceReservation(
+            MissionContext context,
+            Vector3 candidate)
+        {
             if (dependencies.PathReservationManager == null)
             {
                 return true;
             }
 
+            Vector3 from = dependencies.Controller.Position;
             bool reserved = dependencies.PathReservationManager.TryReserveBaseSegment(
                 context.Request.robotId,
                 context.Request.taskId,
@@ -777,6 +841,30 @@ namespace CPS.ICPBL.Student
             }
 
             return reserved;
+        }
+
+        private float ScoreBoxExitClearanceCandidate(
+            MissionContext context,
+            Vector3 candidate,
+            Vector3 boxStationPosition)
+        {
+            Vector3 from = dependencies.Controller.Position;
+            float score = DistanceXZ(from, candidate);
+            score += DistanceXZ(candidate, boxStationPosition) * 0.15f;
+
+            if (TryGetStationBasePosition(
+                context.Request.predictedNextConveyorId,
+                out Vector3 nextConveyorPosition))
+            {
+                score += DistanceXZ(candidate, nextConveyorPosition) * 0.25f;
+            }
+
+            score += ScoreCandidateClearanceFromActiveRobots(
+                context,
+                candidate,
+                2.8f,
+                8f);
+            return score;
         }
 
         private void BuildBoxExitClearanceCandidates(
@@ -856,6 +944,14 @@ namespace CPS.ICPBL.Student
 
             IReadOnlyList<Vector3> candidates =
                 BuildBoxApproachWaitCandidates(context, boxStationPosition, boxApproachKey);
+            TryGetOtherBoxApproachContext(
+                context,
+                boxApproachKey,
+                out MissionContext approachOwner);
+            Vector3 selectedCandidate = Vector3.zero;
+            float selectedScore = float.PositiveInfinity;
+            int selectedCell = StudentConstants.NoStationId;
+            selectedBoxApproachWaitRoute.Clear();
             for (int i = 0; i < candidates.Count; i++)
             {
                 Vector3 candidate = candidates[i];
@@ -884,17 +980,35 @@ namespace CPS.ICPBL.Student
                     continue;
                 }
 
-                TryGetOtherBoxApproachContext(
+                float score = ScoreBoxApproachWaitCandidate(
                     context,
-                    boxApproachKey,
-                    out MissionContext approachOwner);
+                    candidate,
+                    boxApproachWaitRoute,
+                    boxStationPosition,
+                    approachOwner);
+                if (selectedBoxApproachWaitRoute.Count == 0 || score < selectedScore)
+                {
+                    selectedCandidate = candidate;
+                    selectedScore = score;
+                    selectedCell = GetGridCellNumber(candidate);
+                    selectedBoxApproachWaitRoute.Clear();
+                    for (int routeIndex = 0; routeIndex < boxApproachWaitRoute.Count; routeIndex++)
+                    {
+                        selectedBoxApproachWaitRoute.Add(boxApproachWaitRoute[routeIndex]);
+                    }
+                }
+            }
+
+            if (selectedBoxApproachWaitRoute.Count > 0)
+            {
                 LogMessage("Path", string.Format(
-                    "Robot={0} task={1} waiting for box approach at cell={2} target=({3:0.0},{4:0.0}) ownerRobot={5} ownerNext={6} ownNext={7}.",
+                    "Robot={0} task={1} waiting for box approach at cell={2} target=({3:0.0},{4:0.0}) score={5:0.0} ownerRobot={6} ownerNext={7} ownNext={8}.",
                     context.Request.robotId,
                     context.Request.taskId,
-                    GetGridCellNumber(candidate),
-                    candidate.x,
-                    candidate.z,
+                    selectedCell,
+                    selectedCandidate.x,
+                    selectedCandidate.z,
+                    selectedScore,
                     approachOwner != null
                         ? approachOwner.Request.robotId
                         : StudentConstants.UnassignedRobotId,
@@ -902,7 +1016,7 @@ namespace CPS.ICPBL.Student
                         ? approachOwner.Request.predictedNextConveyorId
                         : StudentConstants.NoStationId,
                     context.Request.predictedNextConveyorId));
-                yield return MoveToBoxApproachWaitRoute(context, boxApproachWaitRoute);
+                yield return MoveToBoxApproachWaitRoute(context, selectedBoxApproachWaitRoute);
                 yield break;
             }
 
@@ -1132,6 +1246,157 @@ namespace CPS.ICPBL.Student
                 }
 
                 from = to;
+            }
+
+            return false;
+        }
+
+        private float ScoreBoxApproachWaitCandidate(
+            MissionContext context,
+            Vector3 candidate,
+            IReadOnlyList<Vector3> route,
+            Vector3 boxStationPosition,
+            MissionContext approachOwner)
+        {
+            Vector3 from = dependencies.Controller.Position;
+            float score = CalculateRouteDistance(from, route);
+            score += DistanceXZ(candidate, boxStationPosition) * 0.35f;
+            score += ScoreCandidateClearanceFromActiveRobots(
+                context,
+                candidate,
+                3.0f,
+                8f);
+
+            if (approachOwner == null)
+            {
+                return score;
+            }
+
+            Vector3 ownerApproachTarget = !string.IsNullOrEmpty(approachOwner.CurrentMoveLabel)
+                ? approachOwner.CurrentMoveTarget
+                : boxStationPosition;
+            score += ScoreRouteClearanceAgainstSegment(
+                from,
+                route,
+                approachOwner.LastKnownBasePosition,
+                ownerApproachTarget,
+                3.0f,
+                10f);
+
+            BuildPredictedBoxDepartureRoute(
+                approachOwner,
+                boxStationPosition,
+                ownerBoxDepartureRoute);
+            if (ownerBoxDepartureRoute.Count > 0)
+            {
+                score += ScorePointClearanceAgainstRoute(
+                    candidate,
+                    boxStationPosition,
+                    ownerBoxDepartureRoute,
+                    3.2f,
+                    12f);
+                score += ScoreRouteClearanceAgainstRoute(
+                    from,
+                    route,
+                    boxStationPosition,
+                    ownerBoxDepartureRoute,
+                    2.8f,
+                    8f);
+            }
+
+            score += ScoreNormalBoxOwnerNextCellPenalty(
+                approachOwner,
+                GetGridCellNumber(candidate));
+            return score;
+        }
+
+        private void BuildPredictedBoxDepartureRoute(
+            MissionContext owner,
+            Vector3 boxStationPosition,
+            List<Vector3> route)
+        {
+            route.Clear();
+            if (owner == null)
+            {
+                return;
+            }
+
+            int nextConveyorId = owner.Request.predictedNextConveyorId;
+            if (owner.Result.destinationStationId == StudentConstants.NormalBoxStationId)
+            {
+                if (nextConveyorId >= StudentConstants.MinConveyorId && nextConveyorId <= 3)
+                {
+                    AddPredictedDepartureRoutePoint(route, GetGridCellCenter(12));
+                    AddPredictedDepartureRoutePoint(route, GetGridCellCenter(20));
+                }
+                else if (nextConveyorId >= 5 && nextConveyorId <= StudentConstants.MaxConveyorId)
+                {
+                    AddPredictedDepartureRoutePoint(route, GetGridCellCenter(13));
+                    AddPredictedDepartureRoutePoint(route, GetGridCellCenter(22));
+                }
+                else if (nextConveyorId == 4)
+                {
+                    AddPredictedDepartureRoutePoint(route, boxStationPosition + Vector3.forward * 2.2f);
+                }
+            }
+            else if (owner.Result.destinationStationId == StudentConstants.AbnormalBoxStationId)
+            {
+                AddPredictedDepartureRoutePoint(route, boxStationPosition + Vector3.left * 2.2f);
+            }
+
+            if (TryGetStationBasePosition(nextConveyorId, out Vector3 nextConveyorPosition))
+            {
+                AddPredictedDepartureRoutePoint(route, nextConveyorPosition);
+            }
+        }
+
+        private static void AddPredictedDepartureRoutePoint(
+            List<Vector3> route,
+            Vector3 point)
+        {
+            point = ClampWorldPosition(point);
+            if (route.Count > 0 && DistanceXZ(route[route.Count - 1], point) <= 0.25f)
+            {
+                return;
+            }
+
+            route.Add(point);
+        }
+
+        private static float ScoreNormalBoxOwnerNextCellPenalty(
+            MissionContext approachOwner,
+            int candidateCell)
+        {
+            if (approachOwner == null
+                || approachOwner.Result.destinationStationId != StudentConstants.NormalBoxStationId)
+            {
+                return 0f;
+            }
+
+            int ownerNext = approachOwner.Request.predictedNextConveyorId;
+            if (ownerNext >= StudentConstants.MinConveyorId && ownerNext <= 3
+                && IsCellIn(candidateCell, 11, 12, 20, 27, 28))
+            {
+                return 12f;
+            }
+
+            if (ownerNext >= 5 && ownerNext <= StudentConstants.MaxConveyorId
+                && IsCellIn(candidateCell, 13, 22, 30, 36))
+            {
+                return 12f;
+            }
+
+            return 0f;
+        }
+
+        private static bool IsCellIn(int cellNumber, params int[] cells)
+        {
+            for (int i = 0; i < cells.Length; i++)
+            {
+                if (cellNumber == cells[i])
+                {
+                    return true;
+                }
             }
 
             return false;
@@ -1493,7 +1758,9 @@ namespace CPS.ICPBL.Student
                         ReleaseKey(context, boxApproachKey);
                     }
 
-                    yield return new WaitForSeconds(Mathf.Max(0f, settings.BaseStopSettleSec));
+                    yield return new WaitForSeconds(GetBaseStopSettleSec(
+                        context,
+                        blockingRobotId));
                     float blockedWaitStartedAt = Time.time;
                     while (IsPathBlockedByRobot(
                         context,
@@ -1512,7 +1779,7 @@ namespace CPS.ICPBL.Student
                                 label));
                             yield return new WaitForSeconds(Mathf.Max(
                                 0.01f,
-                                settings.PathYieldCooldownSec));
+                                GetPathYieldCooldown(context)));
                             continue;
                         }
 
@@ -1699,7 +1966,7 @@ namespace CPS.ICPBL.Student
                 yield break;
             }
 
-            context.NextPathYieldAt = Time.time + Mathf.Max(0.1f, settings.PathYieldCooldownSec);
+            context.NextPathYieldAt = Time.time + GetPathYieldCooldown(context);
             IReadOnlyList<Vector3> candidates = BuildPayloadBoxApproachYieldCandidates(
                 context,
                 stationId,
@@ -1992,7 +2259,7 @@ namespace CPS.ICPBL.Student
                 yield break;
             }
 
-            context.NextPathYieldAt = Time.time + Mathf.Max(0.1f, settings.PathYieldCooldownSec);
+            context.NextPathYieldAt = Time.time + GetPathYieldCooldown(context);
             IReadOnlyList<Vector3> candidates = BuildBoxExitClearanceYieldCandidates(
                 context,
                 stationId,
@@ -2284,7 +2551,7 @@ namespace CPS.ICPBL.Student
                 return false;
             }
 
-            if (Time.time - blockedWaitStartedAt < Mathf.Max(0.1f, settings.BaseBlockedEscapeSec))
+            if (Time.time - blockedWaitStartedAt < GetBlockedEscapeDelay(context))
             {
                 return false;
             }
@@ -2313,7 +2580,7 @@ namespace CPS.ICPBL.Student
                 return false;
             }
 
-            if (Time.time - blockedWaitStartedAt < Mathf.Max(0.1f, settings.BaseBlockedEscapeSec))
+            if (Time.time - blockedWaitStartedAt < GetBlockedEscapeDelay(context))
             {
                 return false;
             }
@@ -2384,7 +2651,7 @@ namespace CPS.ICPBL.Student
                 return false;
             }
 
-            if (Time.time - blockedWaitStartedAt < Mathf.Max(0.1f, settings.BaseBlockedEscapeSec))
+            if (Time.time - blockedWaitStartedAt < GetBlockedEscapeDelay(context))
             {
                 return false;
             }
@@ -2508,7 +2775,58 @@ namespace CPS.ICPBL.Student
                 return false;
             }
 
-            return Time.time - waitStartedAt >= Mathf.Max(0.1f, settings.PathYieldWaitSec);
+            return Time.time - waitStartedAt >= GetBlockedEscapeDelay(context);
+        }
+
+        private float GetBaseStopSettleSec(MissionContext context, int blockingRobotId)
+        {
+            float settleSec = Mathf.Max(0f, settings.BaseStopSettleSec);
+            if (blockingRobotId == StudentConstants.UnassignedRobotId
+                || !TryGetActiveRobotPosition(blockingRobotId, out Vector3 blockingPosition))
+            {
+                return settleSec;
+            }
+
+            float distance = DistanceXZ(dependencies.Controller.Position, blockingPosition);
+            if (distance > Mathf.Max(0.1f, settings.CloseBlockSettleDistance))
+            {
+                return settleSec;
+            }
+
+            return Mathf.Max(settleSec, Mathf.Max(0f, settings.CloseBlockSettleSec));
+        }
+
+        private static bool TryGetActiveRobotPosition(int robotId, out Vector3 position)
+        {
+            position = Vector3.zero;
+            if (!ActiveContextsByRobot.TryGetValue(robotId, out MissionContext context)
+                || context == null)
+            {
+                return false;
+            }
+
+            position = context.LastKnownBasePosition;
+            return true;
+        }
+
+        private float GetBlockedEscapeDelay(MissionContext context)
+        {
+            if (context != null && !context.PayloadSecured)
+            {
+                return Mathf.Max(0.1f, settings.EmptyBaseBlockedEscapeSec);
+            }
+
+            return Mathf.Max(0.1f, settings.BaseBlockedEscapeSec);
+        }
+
+        private float GetPathYieldCooldown(MissionContext context)
+        {
+            if (context != null && !context.PayloadSecured)
+            {
+                return Mathf.Max(0.1f, settings.EmptyPathYieldCooldownSec);
+            }
+
+            return Mathf.Max(0.1f, settings.PathYieldCooldownSec);
         }
 
         private IEnumerator TryYieldFromBlockedPath(
@@ -2521,7 +2839,7 @@ namespace CPS.ICPBL.Student
             bool useEmergencyYieldCandidates,
             Action<bool> onYielded)
         {
-            context.NextPathYieldAt = Time.time + Mathf.Max(0.1f, settings.PathYieldCooldownSec);
+            context.NextPathYieldAt = Time.time + GetPathYieldCooldown(context);
             IReadOnlyList<Vector3> candidates;
             if (useSameBoxStagingCandidates)
             {
@@ -2898,6 +3216,226 @@ namespace CPS.ICPBL.Student
             }
 
             emergencyYieldCandidates.Add(candidate);
+        }
+
+        private static float CalculateRouteDistance(
+            Vector3 routeStart,
+            IReadOnlyList<Vector3> route)
+        {
+            float distance = 0f;
+            Vector3 previous = routeStart;
+            for (int i = 0; i < route.Count; i++)
+            {
+                distance += DistanceXZ(previous, route[i]);
+                previous = route[i];
+            }
+
+            return distance;
+        }
+
+        private static float ScoreCandidateClearanceFromActiveRobots(
+            MissionContext context,
+            Vector3 candidate,
+            float clearanceDistance,
+            float weight)
+        {
+            float score = 0f;
+            foreach (KeyValuePair<int, MissionContext> entry in ActiveContextsByRobot)
+            {
+                MissionContext other = entry.Value;
+                if (other == null
+                    || other == context
+                    || other.Request.robotId == context.Request.robotId)
+                {
+                    continue;
+                }
+
+                float distance = DistanceXZ(candidate, other.LastKnownBasePosition);
+                score += ClearancePenalty(distance, clearanceDistance, weight);
+            }
+
+            return score;
+        }
+
+        private static float ScorePointClearanceAgainstRoute(
+            Vector3 point,
+            Vector3 routeStart,
+            IReadOnlyList<Vector3> route,
+            float clearanceDistance,
+            float weight)
+        {
+            if (route.Count == 0)
+            {
+                return 0f;
+            }
+
+            float minDistance = float.PositiveInfinity;
+            Vector3 previous = routeStart;
+            for (int i = 0; i < route.Count; i++)
+            {
+                minDistance = Mathf.Min(
+                    minDistance,
+                    PointSegmentDistanceXZ(point, previous, route[i]));
+                previous = route[i];
+            }
+
+            return ClearancePenalty(minDistance, clearanceDistance, weight);
+        }
+
+        private static float ScoreRouteClearanceAgainstSegment(
+            Vector3 routeStart,
+            IReadOnlyList<Vector3> route,
+            Vector3 segmentStart,
+            Vector3 segmentEnd,
+            float clearanceDistance,
+            float weight)
+        {
+            if (route.Count == 0 || DistanceXZ(segmentStart, segmentEnd) <= 0.25f)
+            {
+                return 0f;
+            }
+
+            float minDistance = float.PositiveInfinity;
+            Vector3 previous = routeStart;
+            for (int i = 0; i < route.Count; i++)
+            {
+                minDistance = Mathf.Min(
+                    minDistance,
+                    SegmentDistanceXZ(previous, route[i], segmentStart, segmentEnd));
+                previous = route[i];
+            }
+
+            return ClearancePenalty(minDistance, clearanceDistance, weight);
+        }
+
+        private static float ScoreRouteClearanceAgainstRoute(
+            Vector3 routeStart,
+            IReadOnlyList<Vector3> route,
+            Vector3 otherRouteStart,
+            IReadOnlyList<Vector3> otherRoute,
+            float clearanceDistance,
+            float weight)
+        {
+            if (route.Count == 0 || otherRoute.Count == 0)
+            {
+                return 0f;
+            }
+
+            float minDistance = float.PositiveInfinity;
+            Vector3 previous = routeStart;
+            for (int i = 0; i < route.Count; i++)
+            {
+                Vector3 otherPrevious = otherRouteStart;
+                for (int otherIndex = 0; otherIndex < otherRoute.Count; otherIndex++)
+                {
+                    minDistance = Mathf.Min(
+                        minDistance,
+                        SegmentDistanceXZ(
+                            previous,
+                            route[i],
+                            otherPrevious,
+                            otherRoute[otherIndex]));
+                    otherPrevious = otherRoute[otherIndex];
+                }
+
+                previous = route[i];
+            }
+
+            return ClearancePenalty(minDistance, clearanceDistance, weight);
+        }
+
+        private static float ClearancePenalty(
+            float distance,
+            float clearanceDistance,
+            float weight)
+        {
+            if (distance >= clearanceDistance)
+            {
+                return 0f;
+            }
+
+            float shortfall = clearanceDistance - Mathf.Max(0f, distance);
+            float penalty = shortfall * weight;
+            if (distance < clearanceDistance * 0.6f)
+            {
+                penalty += weight;
+            }
+
+            return penalty;
+        }
+
+        private static float SegmentDistanceXZ(
+            Vector3 firstStart,
+            Vector3 firstEnd,
+            Vector3 secondStart,
+            Vector3 secondEnd)
+        {
+            if (SegmentsIntersectXZ(firstStart, firstEnd, secondStart, secondEnd))
+            {
+                return 0f;
+            }
+
+            return Mathf.Min(
+                Mathf.Min(
+                    PointSegmentDistanceXZ(firstStart, secondStart, secondEnd),
+                    PointSegmentDistanceXZ(firstEnd, secondStart, secondEnd)),
+                Mathf.Min(
+                    PointSegmentDistanceXZ(secondStart, firstStart, firstEnd),
+                    PointSegmentDistanceXZ(secondEnd, firstStart, firstEnd)));
+        }
+
+        private static bool SegmentsIntersectXZ(
+            Vector3 firstStart,
+            Vector3 firstEnd,
+            Vector3 secondStart,
+            Vector3 secondEnd)
+        {
+            Vector2 a = ToXZ(firstStart);
+            Vector2 b = ToXZ(firstEnd);
+            Vector2 c = ToXZ(secondStart);
+            Vector2 d = ToXZ(secondEnd);
+            float o1 = Cross(b - a, c - a);
+            float o2 = Cross(b - a, d - a);
+            float o3 = Cross(d - c, a - c);
+            float o4 = Cross(d - c, b - c);
+            const float epsilon = 0.0001f;
+
+            if (Mathf.Abs(o1) <= epsilon && IsOnSegmentXZ(a, c, b))
+            {
+                return true;
+            }
+
+            if (Mathf.Abs(o2) <= epsilon && IsOnSegmentXZ(a, d, b))
+            {
+                return true;
+            }
+
+            if (Mathf.Abs(o3) <= epsilon && IsOnSegmentXZ(c, a, d))
+            {
+                return true;
+            }
+
+            if (Mathf.Abs(o4) <= epsilon && IsOnSegmentXZ(c, b, d))
+            {
+                return true;
+            }
+
+            return (o1 > 0f) != (o2 > 0f)
+                && (o3 > 0f) != (o4 > 0f);
+        }
+
+        private static float Cross(Vector2 left, Vector2 right)
+        {
+            return left.x * right.y - left.y * right.x;
+        }
+
+        private static bool IsOnSegmentXZ(Vector2 start, Vector2 point, Vector2 end)
+        {
+            const float epsilon = 0.0001f;
+            return point.x >= Mathf.Min(start.x, end.x) - epsilon
+                && point.x <= Mathf.Max(start.x, end.x) + epsilon
+                && point.y >= Mathf.Min(start.y, end.y) - epsilon
+                && point.y <= Mathf.Max(start.y, end.y) + epsilon;
         }
 
         private static Vector3 FlattenXZ(Vector3 value)
