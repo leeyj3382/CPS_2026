@@ -122,6 +122,7 @@ namespace CPS.ICPBL.Student
         private readonly List<Vector3> boxExitClearanceCandidates = new List<Vector3>(6);
         private static readonly Dictionary<int, MissionContext> ActiveContextsByRobot =
             new Dictionary<int, MissionContext>();
+        private const float NormalBoxApproachExtraDistance = 0.3f;
         private const float DebugGridCellSize = 3f;
         private const float DebugGridMinX = -12f;
         private const float DebugGridMinZ = -9f;
@@ -566,12 +567,38 @@ namespace CPS.ICPBL.Student
                     targetStation.BasePosition,
                     label,
                     () => dependencies.Controller.GoToOperatingStation(stationId));
+                if (!context.Failed && stationId == StudentConstants.NormalBoxStationId)
+                {
+                    Vector3 closeTarget = GetNormalBoxCloseApproachTarget(targetStation);
+                    if (DistanceXZ(closeTarget, dependencies.Controller.Position) > 0.05f)
+                    {
+                        yield return MoveBaseToTarget(
+                            context,
+                            stationId,
+                            closeTarget,
+                            "normal box close approach",
+                            () => dependencies.Controller.MoveBaseTo(closeTarget));
+                    }
+                }
             }
             else
             {
                 dependencies.Controller.GoToOperatingStation(stationId);
                 yield return WaitForControllerIdle(context, settings.MoveTimeoutSec, label);
             }
+        }
+
+        private static Vector3 GetNormalBoxCloseApproachTarget(
+            OperatingStations.Station station)
+        {
+            Vector3 direction = FlattenXZ(station.ArmAnchorPoint - station.BasePosition);
+            if (direction.sqrMagnitude <= 0.0001f)
+            {
+                direction = Vector3.back;
+            }
+
+            return station.BasePosition
+                + direction.normalized * NormalBoxApproachExtraDistance;
         }
 
         private IEnumerator MoveToDestinationBoxStaging(
