@@ -3743,7 +3743,11 @@ namespace CPS.ICPBL.Student
             }
 
             dependencies.SetState?.Invoke(RobotRuntimeState.Placing);
-            yield return MoveArmTo(context, context.ReservedSlot.approachPos, StudentConstants.DefaultArmMoveDurationSec, "place approach");
+            yield return MoveArmTo(
+                context,
+                GetPlaceHorizontalAlignPosition(context),
+                StudentConstants.DefaultArmMoveDurationSec,
+                "place horizontal align");
             if (context.Failed)
             {
                 yield break;
@@ -3781,6 +3785,16 @@ namespace CPS.ICPBL.Student
             }
 
             ReleaseKey(context, armKey);
+        }
+
+        private static Vector3 GetPlaceHorizontalAlignPosition(MissionContext context)
+        {
+            Vector3 alignPosition = context.ReservedSlot.placePos;
+            alignPosition.y = Mathf.Max(
+                context.ReservedSlot.approachPos.y,
+                context.ReservedSlot.retractPos.y,
+                context.ReservedSlot.placePos.y);
+            return alignPosition;
         }
 
         private static Vector3 GetSafePlaceRetractPosition(MissionContext context)
