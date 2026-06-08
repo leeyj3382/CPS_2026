@@ -20,6 +20,7 @@ namespace CPS.ICPBL.Student
         public const int NormalBoxStationId = OperatingStations.NormalBoxId;
         public const int AbnormalBoxStationId = OperatingStations.AbnormalBoxId;
         public const int CentralZoneResourceId = 0;
+        public const int ConveyorFiveSixChokeResourceId = 56;
 
         public const float DefaultMissionTimeoutSec = 60f;
         public const float DefaultMoveTimeoutSec = 15f;

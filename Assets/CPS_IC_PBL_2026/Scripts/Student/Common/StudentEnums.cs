@@ -42,7 +42,9 @@ namespace CPS.ICPBL.Student
         NormalBox = 1,
         AbnormalBox = 2,
         CentralZone = 3,
-        RobotArmZone = 4
+        RobotArmZone = 4,
+        BoxApproach = 5,
+        ConveyorChoke = 6
     }
 
     public enum MissionFailureReason

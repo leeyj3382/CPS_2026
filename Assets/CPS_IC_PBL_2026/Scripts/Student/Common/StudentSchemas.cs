@@ -48,6 +48,7 @@ namespace CPS.ICPBL.Student
         public int conveyorId;
         public float requestTime;
         public float timeoutSec = StudentConstants.DefaultMissionTimeoutSec;
+        public int predictedNextConveyorId = StudentConstants.NoStationId;
 
         [NonSerialized]
         public Action<MissionProgressEvent> onProgress;

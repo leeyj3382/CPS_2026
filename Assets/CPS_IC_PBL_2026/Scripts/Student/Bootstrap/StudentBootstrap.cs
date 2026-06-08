@@ -8,6 +8,8 @@ namespace CPS.ICPBL.Student
         [SerializeField] private StudentSceneReferences sceneReferences;
         [SerializeField] private bool configureOnAwake = true;
         [SerializeField] private bool logWarnings = true;
+        [SerializeField] private bool createDebugGridOverlay = true;
+        [SerializeField] private WorldGridOverlay debugGridOverlay;
 
         private void Awake()
         {
@@ -16,6 +18,23 @@ namespace CPS.ICPBL.Student
                 Configure();
             }
         }
+
+#if UNITY_EDITOR
+        private void OnDrawGizmos()
+        {
+            if (!createDebugGridOverlay || Application.isPlaying)
+            {
+                return;
+            }
+
+            if (debugGridOverlay != null || GetComponent<WorldGridOverlay>() != null)
+            {
+                return;
+            }
+
+            WorldGridOverlay.DrawDefaultEditorGrid();
+        }
+#endif
 
         public void Configure()
         {
@@ -50,6 +69,7 @@ namespace CPS.ICPBL.Student
 
             ConfigureDeadlockGuard();
             ConfigureFleet();
+            ConfigureDebugGridOverlay();
         }
 
         private void ConfigurePathPlanner()
@@ -126,6 +146,26 @@ namespace CPS.ICPBL.Student
                 sceneReferences.RobotAAgent,
                 sceneReferences.RobotBAgent,
                 sceneReferences.TelemetryLogger);
+        }
+
+        private void ConfigureDebugGridOverlay()
+        {
+            if (!createDebugGridOverlay)
+            {
+                return;
+            }
+
+            if (debugGridOverlay == null)
+            {
+                debugGridOverlay = GetComponent<WorldGridOverlay>();
+            }
+
+            if (debugGridOverlay == null)
+            {
+                debugGridOverlay = gameObject.AddComponent<WorldGridOverlay>();
+            }
+
+            debugGridOverlay.Rebuild();
         }
 
         private void Warn(string message)

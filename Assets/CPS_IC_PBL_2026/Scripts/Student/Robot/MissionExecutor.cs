@@ -47,16 +47,27 @@ namespace CPS.ICPBL.Student
             public float PathYieldDistance = 4.5f;
             public float PathYieldMoveTimeoutSec = 6f;
             public float PathYieldCooldownSec = 0.8f;
+            public float EmptyPathYieldCooldownSec = 0.75f;
             public int PathYieldMaxAttempts = 5;
             public float BasePathCheckIntervalSec = 0.05f;
             public float BasePathResumeCheckIntervalSec = 0.1f;
             public float BaseStopSettleSec = 0.05f;
+            public float CloseBlockSettleSec = 0.08f;
+            public float CloseBlockSettleDistance = 2.6f;
             public float BaseBlockedEscapeSec = 2f;
+            public float EmptyBaseBlockedEscapeSec = 1.6f;
             public bool EnableDestinationBoxStaging = true;
             public bool EnableSameBoxFarStaging = true;
             public float SameBoxFarStagingMinDistance = 7.5f;
             public float SameBoxStagingMaxDistanceRatio = 1.65f;
             public float SameBoxStagingMaxExtraDistance = 5f;
+            public bool EnableBoxApproachGate = true;
+            public bool EnableConveyorFiveSixChokeGate = true;
+            public bool EnableBoxExitClearance = true;
+            public float BoxExitClearanceDistance = 2.2f;
+            public float EmergencyYieldDistance = 2.2f;
+            public float EmergencyYieldMaxDistanceRatio = 2.5f;
+            public float EmergencyYieldMaxExtraDistance = 8f;
         }
 
         private sealed class MissionContext
@@ -76,6 +87,10 @@ namespace CPS.ICPBL.Student
             public BoxSlotPose ReservedSlot;
             public BoxType DestinationBoxType;
             public ColorClassificationResult Classification;
+            public string CurrentMoveLabel = string.Empty;
+            public int CurrentMoveStationId = StudentConstants.NoStationId;
+            public Vector3 CurrentMoveTarget;
+            public Vector3 LastKnownBasePosition;
 
             public MissionContext(MissionRequest request)
             {
@@ -97,6 +112,18 @@ namespace CPS.ICPBL.Student
         private readonly Dependencies dependencies;
         private readonly Settings settings;
         private readonly List<Vector3> sameBoxStagingCandidates = new List<Vector3>(4);
+        private readonly List<Vector3> emergencyYieldCandidates = new List<Vector3>(16);
+        private readonly List<Vector3> boxApproachWaitCandidates = new List<Vector3>(8);
+        private readonly List<Vector3> boxApproachWaitRoute = new List<Vector3>(8);
+        private readonly List<Vector3> selectedBoxApproachWaitRoute = new List<Vector3>(8);
+        private readonly List<Vector3> ownerBoxDepartureRoute = new List<Vector3>(6);
+        private readonly List<Vector3> boxExitClearanceCandidates = new List<Vector3>(6);
+        private static readonly Dictionary<int, MissionContext> ActiveContextsByRobot =
+            new Dictionary<int, MissionContext>();
+        private const float DebugGridCellSize = 3f;
+        private const float DebugGridMinX = -12f;
+        private const float DebugGridMinZ = -9f;
+        private const int DebugGridColumnCount = 8;
         private static readonly Vector3 NormalBoxRobotAStagingOffset = new Vector3(-3.8f, 0f, 1.2f);
         private static readonly Vector3 NormalBoxRobotBStagingOffset = new Vector3(3.8f, 0f, 1.2f);
         private static readonly Vector3 AbnormalBoxRobotAStagingOffset = new Vector3(-3.6f, 0f, -1.4f);
@@ -121,13 +148,20 @@ namespace CPS.ICPBL.Student
                 yield break;
             }
 
+            RegisterActiveMission(context);
             dependencies.SetState?.Invoke(RobotRuntimeState.Reserved);
 
             ResourceKey conveyorKey = new ResourceKey(
                 LockResourceType.Conveyor,
                 request.conveyorId);
+            ResourceKey conveyorChokeKey = GetConveyorChokeKey(request.conveyorId);
 
             yield return AcquireCentralZoneIfNeeded(context, request.conveyorId);
+
+            if (!context.Failed)
+            {
+                yield return AcquireConveyorChokeIfNeeded(context, request.conveyorId);
+            }
 
             if (!context.Failed)
             {
@@ -138,6 +172,7 @@ namespace CPS.ICPBL.Student
                     "conveyor station");
             }
 
+            ReleaseKey(context, conveyorChokeKey);
             ReleaseKey(context, new ResourceKey(
                 LockResourceType.CentralZone,
                 StudentConstants.CentralZoneResourceId));
@@ -172,31 +207,25 @@ namespace CPS.ICPBL.Student
                 ResourceKey boxKey = new ResourceKey(
                     StudentConstants.GetBoxLockType(context.DestinationBoxType),
                     context.Result.destinationStationId);
-                bool stagedForBox = false;
-                bool acquireBoxLockBeforeFinalMove = false;
+                ResourceKey boxApproachKey = GetBoxApproachKey(context.Result.destinationStationId);
 
                 if (ShouldStageBeforeDestinationBox(
                     context,
                     boxKey,
-                    out Vector3 stagingPosition,
-                    out acquireBoxLockBeforeFinalMove))
+                    boxApproachKey,
+                    out Vector3 stagingPosition))
                 {
                     yield return MoveToDestinationBoxStaging(context, stagingPosition);
-                    stagedForBox = !context.Failed;
-                }
-
-                if (!context.Failed && stagedForBox && acquireBoxLockBeforeFinalMove)
-                {
-                    yield return AcquireLock(
-                        context,
-                        boxKey,
-                        MissionFailureReason.BoxLockFailed,
-                        "box lock");
                 }
 
                 if (!context.Failed)
                 {
                     yield return AcquireCentralZoneIfNeeded(context, context.Result.destinationStationId);
+                }
+
+                if (!context.Failed)
+                {
+                    yield return AcquireBoxApproachIfNeeded(context, boxApproachKey);
                 }
 
                 if (!context.Failed)
@@ -212,7 +241,7 @@ namespace CPS.ICPBL.Student
                     LockResourceType.CentralZone,
                     StudentConstants.CentralZoneResourceId));
 
-                if (!context.Failed && (!stagedForBox || !acquireBoxLockBeforeFinalMove))
+                if (!context.Failed)
                 {
                     yield return AcquireLock(
                         context,
@@ -227,6 +256,12 @@ namespace CPS.ICPBL.Student
                 }
 
                 ReleaseKey(context, boxKey);
+                if (!context.Failed)
+                {
+                    yield return MoveToBoxExitClearance(context);
+                }
+
+                ReleaseKey(context, boxApproachKey);
             }
 
             if (!context.Failed)
@@ -331,6 +366,54 @@ namespace CPS.ICPBL.Student
                 "central zone lock");
         }
 
+        private IEnumerator AcquireConveyorChokeIfNeeded(MissionContext context, int stationId)
+        {
+            if (!settings.EnableConveyorFiveSixChokeGate || !RequiresConveyorChokeGate(stationId))
+            {
+                yield break;
+            }
+
+            yield return AcquireLock(
+                context,
+                GetConveyorChokeKey(stationId),
+                MissionFailureReason.CollisionRisk,
+                "5/6 conveyor choke");
+        }
+
+        private IEnumerator AcquireBoxApproachIfNeeded(MissionContext context, ResourceKey key)
+        {
+            if (!settings.EnableBoxApproachGate || !StudentConstants.IsBoxStationId(key.id))
+            {
+                yield break;
+            }
+
+            if (HasLock(context, key))
+            {
+                yield break;
+            }
+
+            bool hasBoxStationPosition = TryGetStationBasePosition(key.id, out Vector3 boxStationPosition);
+            if (TryAcquireLockNow(context, key, "box approach gate"))
+            {
+                yield break;
+            }
+
+            if (context.PayloadSecured && hasBoxStationPosition)
+            {
+                yield return StageBeforeBoxApproachLock(context, boxStationPosition, key);
+                if (context.Failed || HasLock(context, key))
+                {
+                    yield break;
+                }
+            }
+
+            yield return AcquireLock(
+                context,
+                key,
+                MissionFailureReason.CollisionRisk,
+                "box approach gate");
+        }
+
         private IEnumerator AcquireLock(
             MissionContext context,
             ResourceKey key,
@@ -425,6 +508,40 @@ namespace CPS.ICPBL.Student
             }
         }
 
+        private bool TryAcquireLockNow(MissionContext context, ResourceKey key, string label)
+        {
+            if (dependencies.LockManager == null)
+            {
+                LogMessage("Lock", string.Format(
+                    "No lock manager; proceeding without {0} for task={1}.",
+                    label,
+                    context.Request.taskId));
+                return true;
+            }
+
+            if (HasLock(context, key))
+            {
+                return true;
+            }
+
+            if (!dependencies.LockManager.TryAcquire(
+                key,
+                context.Request.robotId,
+                context.Request.taskId,
+                out ResourceLockToken token))
+            {
+                return false;
+            }
+
+            context.LockTokens.Add(token);
+            dependencies.TelemetryLogger?.LogLock(
+                "Acquire",
+                key,
+                context.Request.robotId,
+                context.Request.taskId);
+            return true;
+        }
+
         private IEnumerator MoveBaseToStation(
             MissionContext context,
             int stationId,
@@ -482,14 +599,59 @@ namespace CPS.ICPBL.Student
             }
         }
 
+        private IEnumerator MoveToBoxExitClearance(MissionContext context)
+        {
+            if (!settings.EnableBoxExitClearance)
+            {
+                yield break;
+            }
+
+            if (!TryGetStationBasePosition(
+                context.Result.destinationStationId,
+                out Vector3 boxStationPosition))
+            {
+                yield break;
+            }
+
+            Vector3 exitPosition = SelectBoxExitClearancePosition(
+                context,
+                boxStationPosition);
+            exitPosition = ClampWorldPosition(exitPosition);
+            if (DistanceXZ(exitPosition, dependencies.Controller.Position) <= 0.25f)
+            {
+                yield break;
+            }
+
+            LogMessage("Path", string.Format(
+                "Robot={0} task={1} clearing box approach station={2} next={3} cell={4} to=({5:0.0},{6:0.0}) before releasing approach gate.",
+                context.Request.robotId,
+                context.Request.taskId,
+                context.Result.destinationStationId,
+                context.Request.predictedNextConveyorId,
+                GetGridCellNumber(exitPosition),
+                exitPosition.x,
+                exitPosition.z));
+
+            yield return MoveBaseToTarget(
+                context,
+                StudentConstants.NoStationId,
+                exitPosition,
+                "box exit clearance",
+                () => dependencies.Controller.MoveBaseTo(exitPosition));
+
+            if (!context.Failed)
+            {
+                dependencies.SetCurrentStationId?.Invoke(StudentConstants.NoStationId);
+            }
+        }
+
         private bool ShouldStageBeforeDestinationBox(
             MissionContext context,
             ResourceKey boxKey,
-            out Vector3 stagingPosition,
-            out bool acquireBoxLockBeforeFinalMove)
+            ResourceKey boxApproachKey,
+            out Vector3 stagingPosition)
         {
             stagingPosition = Vector3.zero;
-            acquireBoxLockBeforeFinalMove = false;
             if (!settings.EnableDestinationBoxStaging || !context.PayloadSecured)
             {
                 return false;
@@ -509,13 +671,15 @@ namespace CPS.ICPBL.Student
 
             bool boxLockContended = dependencies.LockManager != null
                 && dependencies.LockManager.IsLocked(boxKey);
+            bool boxApproachContended = settings.EnableBoxApproachGate
+                && dependencies.LockManager != null
+                && dependencies.LockManager.IsLocked(boxApproachKey);
             bool boxPathContended = IsDestinationBoxPathContended(context, boxStationPosition);
-            if (!boxLockContended && !boxPathContended)
+            if (!boxLockContended && !boxApproachContended && !boxPathContended)
             {
                 return false;
             }
 
-            acquireBoxLockBeforeFinalMove = boxLockContended;
             if (!TryGetFarSourceBoxStagingPosition(context, out stagingPosition))
             {
                 return false;
@@ -534,6 +698,767 @@ namespace CPS.ICPBL.Student
                 out _,
                 out _,
                 out _);
+        }
+
+        private static ResourceKey GetBoxApproachKey(int stationId)
+        {
+            return new ResourceKey(LockResourceType.BoxApproach, stationId);
+        }
+
+        private static ResourceKey GetConveyorChokeKey(int stationId)
+        {
+            return RequiresConveyorChokeGate(stationId)
+                ? new ResourceKey(
+                    LockResourceType.ConveyorChoke,
+                    StudentConstants.ConveyorFiveSixChokeResourceId)
+                : new ResourceKey(LockResourceType.ConveyorChoke, StudentConstants.NoStationId);
+        }
+
+        private static bool RequiresConveyorChokeGate(int stationId)
+        {
+            return stationId == 5 || stationId == 6;
+        }
+
+        private Vector3 SelectBoxExitClearancePosition(
+            MissionContext context,
+            Vector3 boxStationPosition)
+        {
+            BuildBoxExitClearanceCandidates(context, boxStationPosition);
+            if (boxExitClearanceCandidates.Count == 0)
+            {
+                return boxStationPosition;
+            }
+
+            Vector3 bestReservedCandidate = Vector3.zero;
+            float bestReservedScore = float.PositiveInfinity;
+            bool hasReservedCandidate = false;
+            Vector3 bestReservationFallback = Vector3.zero;
+            float bestReservationFallbackScore = float.PositiveInfinity;
+            bool hasReservationFallback = false;
+            for (int i = 0; i < boxExitClearanceCandidates.Count; i++)
+            {
+                Vector3 candidate = boxExitClearanceCandidates[i];
+                if (DistanceXZ(candidate, dependencies.Controller.Position) <= 0.25f)
+                {
+                    continue;
+                }
+
+                if (!IsBoxExitClearancePathClear(context, candidate))
+                {
+                    continue;
+                }
+
+                float score = ScoreBoxExitClearanceCandidate(
+                    context,
+                    candidate,
+                    boxStationPosition);
+                if (TryProbeBoxExitClearanceReservation(context, candidate))
+                {
+                    if (!hasReservedCandidate || score < bestReservedScore)
+                    {
+                        bestReservedCandidate = candidate;
+                        bestReservedScore = score;
+                        hasReservedCandidate = true;
+                    }
+
+                    continue;
+                }
+
+                if (!hasReservationFallback || score < bestReservationFallbackScore)
+                {
+                    bestReservationFallback = candidate;
+                    bestReservationFallbackScore = score;
+                    hasReservationFallback = true;
+                }
+            }
+
+            if (hasReservedCandidate)
+            {
+                return bestReservedCandidate;
+            }
+
+            if (hasReservationFallback)
+            {
+                return bestReservationFallback;
+            }
+
+            return GetConservativeBoxExitClearanceFallback(context, boxStationPosition);
+        }
+
+        private Vector3 GetConservativeBoxExitClearanceFallback(
+            MissionContext context,
+            Vector3 boxStationPosition)
+        {
+            float distance = Mathf.Max(0.2f, settings.BoxExitClearanceDistance);
+            if (context.Result.destinationStationId == StudentConstants.NormalBoxStationId)
+            {
+                return ClampWorldPosition(boxStationPosition + Vector3.forward * distance);
+            }
+
+            if (context.Result.destinationStationId == StudentConstants.AbnormalBoxStationId)
+            {
+                return ClampWorldPosition(boxStationPosition + Vector3.left * distance);
+            }
+
+            return ClampWorldPosition(boxStationPosition);
+        }
+
+        private bool IsBoxExitClearancePathClear(
+            MissionContext context,
+            Vector3 candidate)
+        {
+            return !IsPathBlockedByRobot(
+                context,
+                StudentConstants.NoStationId,
+                candidate,
+                out _,
+                out _,
+                out _);
+        }
+
+        private bool TryProbeBoxExitClearanceReservation(
+            MissionContext context,
+            Vector3 candidate)
+        {
+            if (dependencies.PathReservationManager == null)
+            {
+                return true;
+            }
+
+            Vector3 from = dependencies.Controller.Position;
+            bool reserved = dependencies.PathReservationManager.TryReserveBaseSegment(
+                context.Request.robotId,
+                context.Request.taskId,
+                from,
+                candidate,
+                CalculatePathPriority(context),
+                out PathReservationToken token,
+                out _,
+                out _);
+            if (reserved)
+            {
+                ReleaseBaseSegment(token);
+            }
+
+            return reserved;
+        }
+
+        private float ScoreBoxExitClearanceCandidate(
+            MissionContext context,
+            Vector3 candidate,
+            Vector3 boxStationPosition)
+        {
+            Vector3 from = dependencies.Controller.Position;
+            float score = DistanceXZ(from, candidate);
+            score += DistanceXZ(candidate, boxStationPosition) * 0.15f;
+
+            if (TryGetStationBasePosition(
+                context.Request.predictedNextConveyorId,
+                out Vector3 nextConveyorPosition))
+            {
+                score += DistanceXZ(candidate, nextConveyorPosition) * 0.25f;
+            }
+
+            score += ScoreCandidateClearanceFromActiveRobots(
+                context,
+                candidate,
+                3.1f,
+                9f);
+            return score;
+        }
+
+        private void BuildBoxExitClearanceCandidates(
+            MissionContext context,
+            Vector3 boxStationPosition)
+        {
+            float distance = Mathf.Max(0.2f, settings.BoxExitClearanceDistance);
+            float lateral = Mathf.Max(1.2f, distance * 0.7f);
+            boxExitClearanceCandidates.Clear();
+
+            if (context.Result.destinationStationId == StudentConstants.NormalBoxStationId)
+            {
+                int nextConveyorId = context.Request.predictedNextConveyorId;
+                if (nextConveyorId >= StudentConstants.MinConveyorId && nextConveyorId <= 3)
+                {
+                    AddBoxExitClearanceCandidate(
+                        boxStationPosition + new Vector3(-lateral, 0f, distance * 0.7f));
+                    AddBoxExitClearanceCandidate(GetGridCellCenter(12));
+                    AddBoxExitClearanceCandidate(GetGridCellCenter(20));
+                }
+                else if (nextConveyorId >= 5 && nextConveyorId <= StudentConstants.MaxConveyorId)
+                {
+                    AddBoxExitClearanceCandidate(
+                        boxStationPosition + new Vector3(lateral, 0f, distance * 0.7f));
+                    AddBoxExitClearanceCandidate(GetGridCellCenter(13));
+                    AddBoxExitClearanceCandidate(GetGridCellCenter(22));
+                }
+                else if (nextConveyorId == 4)
+                {
+                    float side = context.Request.robotId == StudentConstants.RobotAId ? -lateral : lateral;
+                    AddBoxExitClearanceCandidate(
+                        boxStationPosition + new Vector3(side, 0f, distance * 0.75f));
+                }
+
+                AddBoxExitClearanceCandidate(boxStationPosition + Vector3.forward * distance);
+                return;
+            }
+
+            if (context.Result.destinationStationId == StudentConstants.AbnormalBoxStationId)
+            {
+                int nextConveyorId = context.Request.predictedNextConveyorId;
+                float zSide = nextConveyorId >= 6 && nextConveyorId <= StudentConstants.MaxConveyorId
+                    ? 1f
+                    : -1f;
+                AddBoxExitClearanceCandidate(
+                    boxStationPosition + Vector3.left * distance + Vector3.forward * (zSide * lateral));
+                AddBoxExitClearanceCandidate(boxStationPosition + Vector3.left * distance);
+                return;
+            }
+
+            AddBoxExitClearanceCandidate(boxStationPosition);
+        }
+
+        private void AddBoxExitClearanceCandidate(Vector3 candidate)
+        {
+            candidate = ClampWorldPosition(candidate);
+            for (int i = 0; i < boxExitClearanceCandidates.Count; i++)
+            {
+                if (DistanceXZ(boxExitClearanceCandidates[i], candidate) <= 0.25f)
+                {
+                    return;
+                }
+            }
+
+            boxExitClearanceCandidates.Add(candidate);
+        }
+
+        private IEnumerator StageBeforeBoxApproachLock(
+            MissionContext context,
+            Vector3 boxStationPosition,
+            ResourceKey boxApproachKey)
+        {
+            if (!settings.EnableDestinationBoxStaging)
+            {
+                yield break;
+            }
+
+            IReadOnlyList<Vector3> candidates =
+                BuildBoxApproachWaitCandidates(context, boxStationPosition, boxApproachKey);
+            TryGetOtherBoxApproachContext(
+                context,
+                boxApproachKey,
+                out MissionContext approachOwner);
+            Vector3 selectedCandidate = Vector3.zero;
+            float selectedScore = float.PositiveInfinity;
+            int selectedCell = StudentConstants.NoStationId;
+            selectedBoxApproachWaitRoute.Clear();
+            for (int i = 0; i < candidates.Count; i++)
+            {
+                Vector3 candidate = candidates[i];
+                if (DistanceXZ(candidate, dependencies.Controller.Position) <= 0.25f)
+                {
+                    continue;
+                }
+
+                BuildBoxApproachWaitRoute(context, candidate, boxApproachWaitRoute);
+                if (boxApproachWaitRoute.Count == 0)
+                {
+                    continue;
+                }
+
+                if (IsBoxApproachWaitRouteBlocked(
+                    context,
+                    boxApproachWaitRoute,
+                    out int blockingRobotId))
+                {
+                    LogMessage("Path", string.Format(
+                        "Box approach wait route unsafe robot={0} task={1} cell={2}; blockedBy robot={3}.",
+                        context.Request.robotId,
+                        context.Request.taskId,
+                        GetGridCellNumber(candidate),
+                        blockingRobotId));
+                    continue;
+                }
+
+                float score = ScoreBoxApproachWaitCandidate(
+                    context,
+                    candidate,
+                    boxApproachWaitRoute,
+                    boxStationPosition,
+                    approachOwner);
+                if (selectedBoxApproachWaitRoute.Count == 0 || score < selectedScore)
+                {
+                    selectedCandidate = candidate;
+                    selectedScore = score;
+                    selectedCell = GetGridCellNumber(candidate);
+                    selectedBoxApproachWaitRoute.Clear();
+                    for (int routeIndex = 0; routeIndex < boxApproachWaitRoute.Count; routeIndex++)
+                    {
+                        selectedBoxApproachWaitRoute.Add(boxApproachWaitRoute[routeIndex]);
+                    }
+                }
+            }
+
+            if (selectedBoxApproachWaitRoute.Count > 0)
+            {
+                LogMessage("Path", string.Format(
+                    "Robot={0} task={1} waiting for box approach at cell={2} target=({3:0.0},{4:0.0}) score={5:0.0} ownerRobot={6} ownerNext={7} ownNext={8}.",
+                    context.Request.robotId,
+                    context.Request.taskId,
+                    selectedCell,
+                    selectedCandidate.x,
+                    selectedCandidate.z,
+                    selectedScore,
+                    approachOwner != null
+                        ? approachOwner.Request.robotId
+                        : StudentConstants.UnassignedRobotId,
+                    approachOwner != null
+                        ? approachOwner.Request.predictedNextConveyorId
+                        : StudentConstants.NoStationId,
+                    context.Request.predictedNextConveyorId));
+                yield return MoveToBoxApproachWaitRoute(context, selectedBoxApproachWaitRoute);
+                yield break;
+            }
+
+            LogMessage("Path", string.Format(
+                "No safe box approach wait staging robot={0} task={1} station={2}.",
+                context.Request.robotId,
+                context.Request.taskId,
+                context.Result.destinationStationId));
+        }
+
+        private IReadOnlyList<Vector3> BuildBoxApproachWaitCandidates(
+            MissionContext context,
+            Vector3 boxStationPosition,
+            ResourceKey boxApproachKey)
+        {
+            boxApproachWaitCandidates.Clear();
+            if (context.Result.destinationStationId != StudentConstants.NormalBoxStationId)
+            {
+                IReadOnlyList<Vector3> fallback =
+                    BuildSameBoxStagingCandidates(context, boxStationPosition);
+                for (int i = 0; i < fallback.Count; i++)
+                {
+                    AddBoxApproachWaitCandidate(fallback[i]);
+                }
+
+                return boxApproachWaitCandidates;
+            }
+
+            TryGetOtherBoxApproachContext(
+                context,
+                boxApproachKey,
+                out MissionContext approachOwner);
+            int ownerNextConveyorId = approachOwner != null
+                ? approachOwner.Request.predictedNextConveyorId
+                : StudentConstants.NoStationId;
+
+            if (ownerNextConveyorId >= StudentConstants.MinConveyorId
+                && ownerNextConveyorId <= 3)
+            {
+                AddNormalBoxWaitCells(20, 28, 27, 11, 22, 30, 36);
+            }
+            else if (ownerNextConveyorId >= 5
+                && ownerNextConveyorId <= StudentConstants.MaxConveyorId)
+            {
+                AddNormalBoxWaitCells(11, 20, 28, 22, 30, 36);
+            }
+            else if (context.Request.conveyorId <= 4)
+            {
+                AddNormalBoxWaitCells(22, 30, 20, 11, 28, 36);
+            }
+            else
+            {
+                AddNormalBoxWaitCells(22, 30, 36, 20, 11);
+            }
+
+            return boxApproachWaitCandidates;
+        }
+
+        private void AddNormalBoxWaitCells(params int[] cellNumbers)
+        {
+            for (int i = 0; i < cellNumbers.Length; i++)
+            {
+                AddBoxApproachWaitCandidate(GetGridCellCenter(cellNumbers[i]));
+            }
+        }
+
+        private void AddBoxApproachWaitCandidate(Vector3 candidate)
+        {
+            candidate = ClampWorldPosition(candidate);
+            for (int i = 0; i < boxApproachWaitCandidates.Count; i++)
+            {
+                if (DistanceXZ(boxApproachWaitCandidates[i], candidate) <= 0.25f)
+                {
+                    return;
+                }
+            }
+
+            boxApproachWaitCandidates.Add(candidate);
+        }
+
+        private void BuildBoxApproachWaitRoute(
+            MissionContext context,
+            Vector3 candidate,
+            List<Vector3> route)
+        {
+            route.Clear();
+            if (context.Result.destinationStationId != StudentConstants.NormalBoxStationId)
+            {
+                AddBoxApproachWaitRoutePoint(route, candidate);
+                return;
+            }
+
+            int cellNumber = GetGridCellNumber(candidate);
+            Vector3 from = dependencies.Controller.Position;
+            bool fromUpperLeft = from.x < -2.5f && from.z > 0.5f;
+            bool fromUpper = from.z > 0.5f;
+
+            switch (cellNumber)
+            {
+                case 22:
+                    if (fromUpperLeft)
+                    {
+                        AddBoxApproachWaitRouteCells(route, 34, 35, 36, 30, 22);
+                    }
+                    else if (fromUpper)
+                    {
+                        AddBoxApproachWaitRouteCells(route, 30, 22);
+                    }
+                    else
+                    {
+                        AddBoxApproachWaitRouteCells(route, 22);
+                    }
+
+                    break;
+                case 30:
+                    if (fromUpperLeft)
+                    {
+                        AddBoxApproachWaitRouteCells(route, 34, 35, 36, 30);
+                    }
+                    else
+                    {
+                        AddBoxApproachWaitRouteCells(route, 30);
+                    }
+
+                    break;
+                case 20:
+                    if (fromUpperLeft)
+                    {
+                        AddBoxApproachWaitRouteCells(route, 27, 28, 20);
+                    }
+                    else if (fromUpper)
+                    {
+                        AddBoxApproachWaitRouteCells(route, 28, 20);
+                    }
+                    else
+                    {
+                        AddBoxApproachWaitRouteCells(route, 20);
+                    }
+
+                    break;
+                case 11:
+                    if (fromUpperLeft)
+                    {
+                        AddBoxApproachWaitRouteCells(route, 27, 19, 11);
+                    }
+                    else
+                    {
+                        AddBoxApproachWaitRouteCells(route, 11);
+                    }
+
+                    break;
+                case 28:
+                    if (fromUpperLeft)
+                    {
+                        AddBoxApproachWaitRouteCells(route, 27, 28);
+                    }
+                    else
+                    {
+                        AddBoxApproachWaitRouteCells(route, 28);
+                    }
+
+                    break;
+                case 36:
+                    if (fromUpperLeft)
+                    {
+                        AddBoxApproachWaitRouteCells(route, 34, 35, 36);
+                    }
+                    else
+                    {
+                        AddBoxApproachWaitRouteCells(route, 36);
+                    }
+
+                    break;
+                default:
+                    AddBoxApproachWaitRoutePoint(route, candidate);
+                    break;
+            }
+        }
+
+        private void AddBoxApproachWaitRouteCells(List<Vector3> route, params int[] cellNumbers)
+        {
+            for (int i = 0; i < cellNumbers.Length; i++)
+            {
+                AddBoxApproachWaitRoutePoint(route, GetGridCellCenter(cellNumbers[i]));
+            }
+        }
+
+        private void AddBoxApproachWaitRoutePoint(List<Vector3> route, Vector3 point)
+        {
+            point = ClampWorldPosition(point);
+            Vector3 previous = route.Count > 0
+                ? route[route.Count - 1]
+                : dependencies.Controller.Position;
+            if (DistanceXZ(previous, point) <= 0.25f)
+            {
+                return;
+            }
+
+            route.Add(point);
+        }
+
+        private bool IsBoxApproachWaitRouteBlocked(
+            MissionContext context,
+            IReadOnlyList<Vector3> route,
+            out int blockingRobotId)
+        {
+            blockingRobotId = StudentConstants.UnassignedRobotId;
+            if (dependencies.PathPlanner == null)
+            {
+                return false;
+            }
+
+            Vector3 from = dependencies.Controller.Position;
+            for (int i = 0; i < route.Count; i++)
+            {
+                Vector3 to = route[i];
+                if (dependencies.PathPlanner.IsBasePathBlocked(
+                    context.Request.robotId,
+                    StudentConstants.NoStationId,
+                    from,
+                    to,
+                    out blockingRobotId,
+                    out _,
+                    out _))
+                {
+                    return true;
+                }
+
+                from = to;
+            }
+
+            return false;
+        }
+
+        private float ScoreBoxApproachWaitCandidate(
+            MissionContext context,
+            Vector3 candidate,
+            IReadOnlyList<Vector3> route,
+            Vector3 boxStationPosition,
+            MissionContext approachOwner)
+        {
+            Vector3 from = dependencies.Controller.Position;
+            float score = CalculateRouteDistance(from, route);
+            score += DistanceXZ(candidate, boxStationPosition) * 0.35f;
+            score += ScoreCandidateClearanceFromActiveRobots(
+                context,
+                candidate,
+                3.3f,
+                9f);
+
+            if (approachOwner == null)
+            {
+                return score;
+            }
+
+            Vector3 ownerApproachTarget = !string.IsNullOrEmpty(approachOwner.CurrentMoveLabel)
+                ? approachOwner.CurrentMoveTarget
+                : boxStationPosition;
+            score += ScoreRouteClearanceAgainstSegment(
+                from,
+                route,
+                approachOwner.LastKnownBasePosition,
+                ownerApproachTarget,
+                3.0f,
+                10f);
+
+            BuildPredictedBoxDepartureRoute(
+                approachOwner,
+                boxStationPosition,
+                ownerBoxDepartureRoute);
+            if (ownerBoxDepartureRoute.Count > 0)
+            {
+                score += ScorePointClearanceAgainstRoute(
+                    candidate,
+                    boxStationPosition,
+                    ownerBoxDepartureRoute,
+                    3.4f,
+                    13f);
+                score += ScoreRouteClearanceAgainstRoute(
+                    from,
+                    route,
+                    boxStationPosition,
+                    ownerBoxDepartureRoute,
+                    3.0f,
+                    9f);
+            }
+
+            score += ScoreNormalBoxOwnerNextCellPenalty(
+                approachOwner,
+                GetGridCellNumber(candidate));
+            return score;
+        }
+
+        private void BuildPredictedBoxDepartureRoute(
+            MissionContext owner,
+            Vector3 boxStationPosition,
+            List<Vector3> route)
+        {
+            route.Clear();
+            if (owner == null)
+            {
+                return;
+            }
+
+            int nextConveyorId = owner.Request.predictedNextConveyorId;
+            if (owner.Result.destinationStationId == StudentConstants.NormalBoxStationId)
+            {
+                if (nextConveyorId >= StudentConstants.MinConveyorId && nextConveyorId <= 3)
+                {
+                    AddPredictedDepartureRoutePoint(route, GetGridCellCenter(12));
+                    AddPredictedDepartureRoutePoint(route, GetGridCellCenter(20));
+                }
+                else if (nextConveyorId >= 5 && nextConveyorId <= StudentConstants.MaxConveyorId)
+                {
+                    AddPredictedDepartureRoutePoint(route, GetGridCellCenter(13));
+                    AddPredictedDepartureRoutePoint(route, GetGridCellCenter(22));
+                }
+                else if (nextConveyorId == 4)
+                {
+                    AddPredictedDepartureRoutePoint(route, boxStationPosition + Vector3.forward * 2.2f);
+                }
+            }
+            else if (owner.Result.destinationStationId == StudentConstants.AbnormalBoxStationId)
+            {
+                AddPredictedDepartureRoutePoint(route, boxStationPosition + Vector3.left * 2.2f);
+            }
+
+            if (TryGetStationBasePosition(nextConveyorId, out Vector3 nextConveyorPosition))
+            {
+                AddPredictedDepartureRoutePoint(route, nextConveyorPosition);
+            }
+        }
+
+        private static void AddPredictedDepartureRoutePoint(
+            List<Vector3> route,
+            Vector3 point)
+        {
+            point = ClampWorldPosition(point);
+            if (route.Count > 0 && DistanceXZ(route[route.Count - 1], point) <= 0.25f)
+            {
+                return;
+            }
+
+            route.Add(point);
+        }
+
+        private static float ScoreNormalBoxOwnerNextCellPenalty(
+            MissionContext approachOwner,
+            int candidateCell)
+        {
+            if (approachOwner == null
+                || approachOwner.Result.destinationStationId != StudentConstants.NormalBoxStationId)
+            {
+                return 0f;
+            }
+
+            int ownerNext = approachOwner.Request.predictedNextConveyorId;
+            if (ownerNext >= StudentConstants.MinConveyorId && ownerNext <= 3
+                && IsCellIn(candidateCell, 11, 12, 20, 27, 28))
+            {
+                return 12f;
+            }
+
+            if (ownerNext >= 5 && ownerNext <= StudentConstants.MaxConveyorId
+                && IsCellIn(candidateCell, 13, 22, 30, 36))
+            {
+                return 12f;
+            }
+
+            return 0f;
+        }
+
+        private static bool IsCellIn(int cellNumber, params int[] cells)
+        {
+            for (int i = 0; i < cells.Length; i++)
+            {
+                if (cellNumber == cells[i])
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private IEnumerator MoveToBoxApproachWaitRoute(
+            MissionContext context,
+            IReadOnlyList<Vector3> route)
+        {
+            dependencies.SetState?.Invoke(RobotRuntimeState.MovingToBox);
+            for (int i = 0; i < route.Count; i++)
+            {
+                Vector3 target = route[i];
+                if (DistanceXZ(target, dependencies.Controller.Position) <= 0.25f)
+                {
+                    continue;
+                }
+
+                yield return MoveBaseToTarget(
+                    context,
+                    StudentConstants.NoStationId,
+                    target,
+                    "box approach wait cell",
+                    () => dependencies.Controller.MoveBaseTo(target));
+                if (context.Failed)
+                {
+                    yield break;
+                }
+            }
+
+            dependencies.SetCurrentStationId?.Invoke(StudentConstants.NoStationId);
+        }
+
+        private static bool TryGetOtherBoxApproachContext(
+            MissionContext context,
+            ResourceKey boxApproachKey,
+            out MissionContext other)
+        {
+            other = null;
+            foreach (KeyValuePair<int, MissionContext> entry in ActiveContextsByRobot)
+            {
+                MissionContext candidate = entry.Value;
+                if (candidate == null
+                    || candidate == context
+                    || candidate.Request.robotId == context.Request.robotId)
+                {
+                    continue;
+                }
+
+                if (HasLock(candidate, boxApproachKey))
+                {
+                    other = candidate;
+                    return true;
+                }
+
+                if (other == null && candidate.PayloadSecured)
+                {
+                    other = candidate;
+                }
+            }
+
+            return other != null;
         }
 
         private bool IsDestinationBoxPathContended(
@@ -755,6 +1680,7 @@ namespace CPS.ICPBL.Student
             string label,
             Action move)
         {
+            SetCurrentMoveContext(context, stationId, targetPosition, label);
             RegisterActiveBasePath(context, targetPosition);
             move?.Invoke();
             yield return WaitForBaseMoveWithDynamicStop(
@@ -764,6 +1690,7 @@ namespace CPS.ICPBL.Student
                 label,
                 move);
             ClearActiveBasePath(context);
+            ClearCurrentMoveContext(context, label);
         }
 
         private IEnumerator WaitForBaseMoveWithDynamicStop(
@@ -775,9 +1702,15 @@ namespace CPS.ICPBL.Student
         {
             float movingDeadline = Time.time + Mathf.Max(0f, settings.MoveTimeoutSec);
             float nextCheckAt = Time.time;
+            bool releaseBoxApproachWhileBlocked =
+                settings.EnableBoxApproachGate && StudentConstants.IsBoxStationId(stationId);
+            ResourceKey boxApproachKey = releaseBoxApproachWhileBlocked
+                ? GetBoxApproachKey(stationId)
+                : default;
 
             while (dependencies.Controller.IsBusy)
             {
+                context.LastKnownBasePosition = dependencies.Controller.Position;
                 MaintainHeldPayloadAlignment(context);
                 if (Time.time > movingDeadline)
                 {
@@ -815,7 +1748,19 @@ namespace CPS.ICPBL.Student
                     }
 
                     ClearActiveBasePath(context);
-                    yield return new WaitForSeconds(Mathf.Max(0f, settings.BaseStopSettleSec));
+                    if (releaseBoxApproachWhileBlocked && HasLock(context, boxApproachKey))
+                    {
+                        LogMessage("Lock", string.Format(
+                            "Robot={0} task={1} releasing box approach gate while blocked before {2}.",
+                            context.Request.robotId,
+                            context.Request.taskId,
+                            label));
+                        ReleaseKey(context, boxApproachKey);
+                    }
+
+                    yield return new WaitForSeconds(GetBaseStopSettleSec(
+                        context,
+                        blockingRobotId));
                     float blockedWaitStartedAt = Time.time;
                     while (IsPathBlockedByRobot(
                         context,
@@ -834,8 +1779,50 @@ namespace CPS.ICPBL.Student
                                 label));
                             yield return new WaitForSeconds(Mathf.Max(
                                 0.01f,
-                                settings.PathYieldCooldownSec));
+                                GetPathYieldCooldown(context)));
                             continue;
+                        }
+
+                        if (CanYieldForPayloadBoxApproach(context, blockingRobotId, label))
+                        {
+                            bool yieldedForPayloadBox = false;
+                            yield return TryYieldForPayloadBoxApproach(
+                                context,
+                                stationId,
+                                targetPosition,
+                                blockingRobotId,
+                                value => yieldedForPayloadBox = value);
+                            if (context.Failed)
+                            {
+                                yield break;
+                            }
+
+                            if (yieldedForPayloadBox)
+                            {
+                                blockedWaitStartedAt = Time.time;
+                                break;
+                            }
+                        }
+
+                        if (CanYieldForBoxExitClearance(context, blockingRobotId, label))
+                        {
+                            bool yieldedForBoxExit = false;
+                            yield return TryYieldForBoxExitClearance(
+                                context,
+                                stationId,
+                                targetPosition,
+                                blockingRobotId,
+                                value => yieldedForBoxExit = value);
+                            if (context.Failed)
+                            {
+                                yield break;
+                            }
+
+                            if (yieldedForBoxExit)
+                            {
+                                blockedWaitStartedAt = Time.time;
+                                break;
+                            }
                         }
 
                         bool sameBoxStagingEscape = CanAttemptSameBoxFarStaging(
@@ -851,21 +1838,26 @@ namespace CPS.ICPBL.Student
                                 blockingRobotId,
                                 waitForSameBox,
                                 blockedWaitStartedAt);
-                        if (CanAttemptDynamicDetour(
+                        bool dynamicDetour = CanAttemptDynamicDetour(
                                 context,
                                 blockingRobotId,
                                 waitForSameBox,
                                 preferDetour,
-                                blockedWaitStartedAt)
-                            || CanAttemptBlockedEscape(
+                                blockedWaitStartedAt);
+                        bool blockedEscape = CanAttemptBlockedEscape(
                                 context,
                                 blockingRobotId,
                                 waitForSameBox,
-                                blockedWaitStartedAt)
+                                blockedWaitStartedAt);
+                        if (dynamicDetour
+                            || blockedEscape
                             || sameBoxStagingEscape
                             || sameBoxEscape)
                         {
                             bool retriedDetour = false;
+                            bool emergencyYield = !context.PayloadSecured
+                                && !waitForSameBox
+                                && (dynamicDetour || blockedEscape);
                             yield return TryYieldFromBlockedPath(
                                 context,
                                 sameBoxEscape || sameBoxStagingEscape
@@ -875,6 +1867,7 @@ namespace CPS.ICPBL.Student
                                 targetPosition,
                                 label,
                                 sameBoxStagingEscape,
+                                emergencyYield,
                                 value => retriedDetour = value);
                             if (context.Failed)
                             {
@@ -901,6 +1894,15 @@ namespace CPS.ICPBL.Student
                     }
 
                     movingDeadline = Time.time + Mathf.Max(0f, settings.MoveTimeoutSec);
+                    if (releaseBoxApproachWhileBlocked)
+                    {
+                        yield return AcquireBoxApproachIfNeeded(context, boxApproachKey);
+                        if (context.Failed)
+                        {
+                            yield break;
+                        }
+                    }
+
                     RegisterActiveBasePath(context, targetPosition);
                     restartMove?.Invoke();
                     nextCheckAt = Time.time + Mathf.Max(0.01f, settings.BasePathCheckIntervalSec);
@@ -912,6 +1914,598 @@ namespace CPS.ICPBL.Student
             }
 
             MaintainHeldPayloadAlignment(context);
+        }
+
+        private bool CanYieldForPayloadBoxApproach(
+            MissionContext context,
+            int blockingRobotId,
+            string label)
+        {
+            if (context.PayloadSecured
+                || string.Equals(label, "box station", StringComparison.Ordinal)
+                || blockingRobotId == StudentConstants.UnassignedRobotId)
+            {
+                return false;
+            }
+
+            if (Time.time < context.NextPathYieldAt)
+            {
+                return false;
+            }
+
+            if (!ActiveContextsByRobot.TryGetValue(
+                blockingRobotId,
+                out MissionContext blockingContext)
+                || blockingContext == null
+                || !blockingContext.PayloadSecured
+                || !StudentConstants.IsBoxStationId(blockingContext.Result.destinationStationId))
+            {
+                return false;
+            }
+
+            return string.Equals(
+                    blockingContext.CurrentMoveLabel,
+                    "box station",
+                    StringComparison.Ordinal)
+                || blockingContext.CurrentMoveStationId == blockingContext.Result.destinationStationId;
+        }
+
+        private IEnumerator TryYieldForPayloadBoxApproach(
+            MissionContext context,
+            int stationId,
+            Vector3 originalTarget,
+            int blockingRobotId,
+            Action<bool> onYielded)
+        {
+            if (!ActiveContextsByRobot.TryGetValue(
+                blockingRobotId,
+                out MissionContext blockingContext)
+                || blockingContext == null)
+            {
+                onYielded?.Invoke(false);
+                yield break;
+            }
+
+            context.NextPathYieldAt = Time.time + GetPathYieldCooldown(context);
+            IReadOnlyList<Vector3> candidates = BuildPayloadBoxApproachYieldCandidates(
+                context,
+                stationId,
+                blockingContext);
+            for (int i = 0; i < candidates.Count; i++)
+            {
+                Vector3 from = dependencies.Controller.Position;
+                Vector3 candidate = candidates[i];
+                if (DistanceXZ(from, candidate) <= 0.2f)
+                {
+                    continue;
+                }
+
+                bool movingAwayFromBlocker = IsMovingAwayFromBlockingRobot(
+                    from,
+                    candidate,
+                    blockingContext);
+                bool clearingBlockingPath = IsClearingBlockingMovePath(
+                    from,
+                    candidate,
+                    blockingContext);
+                if (!movingAwayFromBlocker && !clearingBlockingPath)
+                {
+                    continue;
+                }
+
+                if (IsPathBlockedByRobot(
+                    context,
+                    StudentConstants.NoStationId,
+                    candidate,
+                    out int candidateBlockingRobotId,
+                    out _,
+                    out _)
+                    && candidateBlockingRobotId != blockingRobotId)
+                {
+                    LogMessage("Path", string.Format(
+                        "Payload-box yield candidate unsafe robot={0} task={1} cell={2}; blockedBy robot={3}.",
+                        context.Request.robotId,
+                        context.Request.taskId,
+                        GetGridCellNumber(candidate),
+                        candidateBlockingRobotId));
+                    continue;
+                }
+
+                PathReservationToken yieldToken = null;
+                bool reserved = false;
+                if (dependencies.PathReservationManager != null)
+                {
+                    float priority = CalculatePathPriority(context);
+                    reserved = dependencies.PathReservationManager.TryReserveBaseSegment(
+                        context.Request.robotId,
+                        context.Request.taskId,
+                        from,
+                        candidate,
+                        priority,
+                        out yieldToken,
+                        out int reservationBlockingRobotId,
+                        out int reservationBlockingTaskId);
+                    if (!reserved
+                        && (reservationBlockingRobotId != blockingRobotId
+                            || (!movingAwayFromBlocker && !clearingBlockingPath)))
+                    {
+                        LogMessage("Path", string.Format(
+                            "Payload-box yield candidate blocked robot={0} task={1} cell={2}; blockedBy robot={3} task={4}.",
+                            context.Request.robotId,
+                            context.Request.taskId,
+                            GetGridCellNumber(candidate),
+                            reservationBlockingRobotId,
+                            reservationBlockingTaskId));
+                        continue;
+                    }
+                }
+
+                context.PathYieldAttempts++;
+                LogMessage("Path", string.Format(
+                    "Payload-box yield robot={0} task={1} toCell={2} to=({3:0.0},{4:0.0}) blockerRobot={5} blockerConveyor={6} blockerNext={7} ownTarget={8}.",
+                    context.Request.robotId,
+                    context.Request.taskId,
+                    GetGridCellNumber(candidate),
+                    candidate.x,
+                    candidate.z,
+                    blockingRobotId,
+                    blockingContext.Request.conveyorId,
+                    blockingContext.Request.predictedNextConveyorId,
+                    stationId));
+
+                RegisterActiveBasePath(context, candidate);
+                dependencies.Controller.MoveBaseTo(candidate);
+                bool arrived = false;
+                yield return WaitForYieldMoveIgnoringBlocker(
+                    context,
+                    candidate,
+                    blockingRobotId,
+                    Mathf.Max(0.1f, settings.PathYieldMoveTimeoutSec),
+                    "payload box approach",
+                    value => arrived = value);
+                if (reserved)
+                {
+                    ReleaseBaseSegment(yieldToken);
+                }
+
+                ClearActiveBasePath(context);
+                if (!context.Failed && arrived)
+                {
+                    onYielded?.Invoke(true);
+                    yield break;
+                }
+            }
+
+            onYielded?.Invoke(false);
+        }
+
+        private IReadOnlyList<Vector3> BuildPayloadBoxApproachYieldCandidates(
+            MissionContext context,
+            int stationId,
+            MissionContext blockingContext)
+        {
+            boxApproachWaitCandidates.Clear();
+            if (blockingContext.Result.destinationStationId == StudentConstants.NormalBoxStationId)
+            {
+                AddPayloadBoxApproachLocalYieldCandidates(context, blockingContext);
+                if (stationId >= StudentConstants.MinConveyorId && stationId <= 4)
+                {
+                    AddNormalBoxWaitCells(36, 35, 34, 28, 27, 22, 30, 20, 11);
+                }
+                else
+                {
+                    AddNormalBoxWaitCells(28, 27, 20, 11, 36, 35, 22, 30);
+                }
+
+                return boxApproachWaitCandidates;
+            }
+
+            if (blockingContext.Result.destinationStationId == StudentConstants.AbnormalBoxStationId)
+            {
+                AddBoxApproachWaitCandidate(FarAbnormalBoxApproachStagingPosition);
+                if (TryGetStationBasePosition(
+                    StudentConstants.AbnormalBoxStationId,
+                    out Vector3 abnormalBoxPosition))
+                {
+                    AddBoxApproachWaitCandidate(
+                        abnormalBoxPosition + AbnormalBoxRobotAStagingOffset);
+                    AddBoxApproachWaitCandidate(
+                        abnormalBoxPosition + AbnormalBoxRobotBStagingOffset);
+                }
+            }
+
+            return boxApproachWaitCandidates;
+        }
+
+        private void AddPayloadBoxApproachLocalYieldCandidates(
+            MissionContext context,
+            MissionContext blockingContext)
+        {
+            Vector3 from = dependencies.Controller.Position;
+            Vector3 blockingFrom = blockingContext.LastKnownBasePosition;
+            Vector3 blockingTo = blockingContext.CurrentMoveTarget;
+            Vector3 blockingDirection = FlattenXZ(blockingTo - blockingFrom);
+            if (blockingDirection.sqrMagnitude <= 0.0001f)
+            {
+                blockingDirection = FlattenXZ(blockingTo - from);
+            }
+
+            if (blockingDirection.sqrMagnitude <= 0.0001f)
+            {
+                return;
+            }
+
+            blockingDirection.Normalize();
+            Vector3 side = new Vector3(-blockingDirection.z, 0f, blockingDirection.x);
+            Vector3 sideA = from + side * DebugGridCellSize;
+            Vector3 sideB = from - side * DebugGridCellSize;
+            if (PointSegmentDistanceXZ(sideA, blockingFrom, blockingTo)
+                >= PointSegmentDistanceXZ(sideB, blockingFrom, blockingTo))
+            {
+                AddBoxApproachWaitCandidate(sideA);
+                AddBoxApproachWaitCandidate(sideB);
+            }
+            else
+            {
+                AddBoxApproachWaitCandidate(sideB);
+                AddBoxApproachWaitCandidate(sideA);
+            }
+
+            AddBoxApproachWaitCandidate(from + side * (DebugGridCellSize * 1.5f));
+            AddBoxApproachWaitCandidate(from - side * (DebugGridCellSize * 1.5f));
+        }
+
+        private IEnumerator WaitForYieldMoveIgnoringBlocker(
+            MissionContext context,
+            Vector3 targetPosition,
+            int ignoredBlockingRobotId,
+            float timeoutSec,
+            string label,
+            Action<bool> onArrived)
+        {
+            float deadline = Time.time + Mathf.Max(0f, timeoutSec);
+            float nextCheckAt = Time.time;
+            while (dependencies.Controller.IsBusy)
+            {
+                context.LastKnownBasePosition = dependencies.Controller.Position;
+                MaintainHeldPayloadAlignment(context);
+                if (Time.time > deadline)
+                {
+                    dependencies.SetState?.Invoke(RobotRuntimeState.Stuck);
+                    Fail(context, MissionFailureReason.MoveTimeout, string.Format(
+                        "Timed out while yielding for {0}.",
+                        label));
+                    yield break;
+                }
+
+                if (Time.time >= nextCheckAt
+                    && IsPathBlockedByRobot(
+                        context,
+                        StudentConstants.NoStationId,
+                        targetPosition,
+                        out int currentBlockingRobotId,
+                        out _,
+                        out _)
+                    && (currentBlockingRobotId != ignoredBlockingRobotId
+                        || !ActiveContextsByRobot.TryGetValue(
+                            ignoredBlockingRobotId,
+                            out MissionContext blockingContext)
+                        || (!IsMovingAwayFromBlockingRobot(
+                                dependencies.Controller.Position,
+                                targetPosition,
+                                blockingContext)
+                            && !IsClearingBlockingMovePath(
+                                dependencies.Controller.Position,
+                                targetPosition,
+                                blockingContext))))
+                {
+                    dependencies.Controller.MoveBaseTo(dependencies.Controller.Position);
+                    yield return WaitForControllerIdle(
+                        context,
+                        Mathf.Max(0.1f, settings.PathYieldMoveTimeoutSec),
+                        string.Format("{0} yield stop", label));
+                    onArrived?.Invoke(false);
+                    yield break;
+                }
+
+                nextCheckAt = Time.time + Mathf.Max(0.01f, settings.BasePathCheckIntervalSec);
+                yield return null;
+            }
+
+            context.LastKnownBasePosition = dependencies.Controller.Position;
+            onArrived?.Invoke(true);
+        }
+
+        private bool CanYieldForBoxExitClearance(
+            MissionContext context,
+            int blockingRobotId,
+            string label)
+        {
+            if (context.PayloadSecured
+                || string.Equals(label, "box exit clearance", StringComparison.Ordinal)
+                || blockingRobotId == StudentConstants.UnassignedRobotId)
+            {
+                return false;
+            }
+
+            if (!ActiveContextsByRobot.TryGetValue(
+                blockingRobotId,
+                out MissionContext blockingContext)
+                || blockingContext == null)
+            {
+                return false;
+            }
+
+            return string.Equals(
+                    blockingContext.CurrentMoveLabel,
+                    "box exit clearance",
+                    StringComparison.Ordinal)
+                && StudentConstants.IsBoxStationId(blockingContext.Result.destinationStationId);
+        }
+
+        private IEnumerator TryYieldForBoxExitClearance(
+            MissionContext context,
+            int stationId,
+            Vector3 originalTarget,
+            int blockingRobotId,
+            Action<bool> onYielded)
+        {
+            if (!ActiveContextsByRobot.TryGetValue(
+                blockingRobotId,
+                out MissionContext blockingContext)
+                || blockingContext == null)
+            {
+                onYielded?.Invoke(false);
+                yield break;
+            }
+
+            context.NextPathYieldAt = Time.time + GetPathYieldCooldown(context);
+            IReadOnlyList<Vector3> candidates = BuildBoxExitClearanceYieldCandidates(
+                context,
+                stationId,
+                blockingContext);
+            for (int i = 0; i < candidates.Count; i++)
+            {
+                Vector3 from = dependencies.Controller.Position;
+                Vector3 candidate = candidates[i];
+                if (DistanceXZ(from, candidate) <= 0.2f)
+                {
+                    continue;
+                }
+
+                bool movingAwayFromBlocker = IsMovingAwayFromBlockingRobot(
+                    from,
+                    candidate,
+                    blockingContext);
+                if (!movingAwayFromBlocker)
+                {
+                    continue;
+                }
+
+                if (IsPathBlockedByRobot(
+                    context,
+                    StudentConstants.NoStationId,
+                    candidate,
+                    out int candidateBlockingRobotId,
+                    out _,
+                    out _)
+                    && candidateBlockingRobotId != blockingRobotId)
+                {
+                    LogMessage("Path", string.Format(
+                        "Box-exit yield candidate unsafe robot={0} task={1} cell={2}; blockedBy robot={3}.",
+                        context.Request.robotId,
+                        context.Request.taskId,
+                        GetGridCellNumber(candidate),
+                        candidateBlockingRobotId));
+                    continue;
+                }
+
+                PathReservationToken yieldToken = null;
+                bool reserved = false;
+                if (dependencies.PathReservationManager != null)
+                {
+                    float priority = CalculatePathPriority(context);
+                    reserved = dependencies.PathReservationManager.TryReserveBaseSegment(
+                        context.Request.robotId,
+                        context.Request.taskId,
+                        from,
+                        candidate,
+                        priority,
+                        out yieldToken,
+                        out int reservationBlockingRobotId,
+                        out int reservationBlockingTaskId);
+                    if (!reserved
+                        && (reservationBlockingRobotId != blockingRobotId
+                            || !movingAwayFromBlocker))
+                    {
+                        LogMessage("Path", string.Format(
+                            "Box-exit yield candidate blocked robot={0} task={1} cell={2}; blockedBy robot={3} task={4}.",
+                            context.Request.robotId,
+                            context.Request.taskId,
+                            GetGridCellNumber(candidate),
+                            reservationBlockingRobotId,
+                            reservationBlockingTaskId));
+                        continue;
+                    }
+                }
+
+                context.PathYieldAttempts++;
+                LogMessage("Path", string.Format(
+                    "Box-exit yield robot={0} task={1} toCell={2} to=({3:0.0},{4:0.0}) blockerRobot={5} blockerNext={6} ownTarget={7}.",
+                    context.Request.robotId,
+                    context.Request.taskId,
+                    GetGridCellNumber(candidate),
+                    candidate.x,
+                    candidate.z,
+                    blockingRobotId,
+                    blockingContext.Request.predictedNextConveyorId,
+                    stationId));
+
+                RegisterActiveBasePath(context, candidate);
+                dependencies.Controller.MoveBaseTo(candidate);
+                bool arrived = false;
+                yield return WaitForBoxExitYieldMove(
+                    context,
+                    candidate,
+                    blockingRobotId,
+                    Mathf.Max(0.1f, settings.PathYieldMoveTimeoutSec),
+                    value => arrived = value);
+                if (reserved)
+                {
+                    ReleaseBaseSegment(yieldToken);
+                }
+
+                ClearActiveBasePath(context);
+                if (!context.Failed && arrived)
+                {
+                    onYielded?.Invoke(true);
+                    yield break;
+                }
+            }
+
+            onYielded?.Invoke(false);
+        }
+
+        private IReadOnlyList<Vector3> BuildBoxExitClearanceYieldCandidates(
+            MissionContext context,
+            int stationId,
+            MissionContext blockingContext)
+        {
+            boxApproachWaitCandidates.Clear();
+            int blockerNext = blockingContext.Request.predictedNextConveyorId;
+            if (blockerNext >= StudentConstants.MinConveyorId && blockerNext <= 3)
+            {
+                AddNormalBoxWaitCells(22, 30, 36, 20, 28, 11);
+            }
+            else if (blockerNext >= 5 && blockerNext <= StudentConstants.MaxConveyorId)
+            {
+                AddNormalBoxWaitCells(20, 28, 11, 22, 30, 36);
+            }
+            else if (stationId >= StudentConstants.MinConveyorId && stationId <= 4)
+            {
+                AddNormalBoxWaitCells(20, 28, 11, 22, 30);
+            }
+            else
+            {
+                AddNormalBoxWaitCells(22, 30, 36, 20, 28);
+            }
+
+            return boxApproachWaitCandidates;
+        }
+
+        private IEnumerator WaitForBoxExitYieldMove(
+            MissionContext context,
+            Vector3 targetPosition,
+            int blockingRobotId,
+            float timeoutSec,
+            Action<bool> onArrived)
+        {
+            float deadline = Time.time + Mathf.Max(0f, timeoutSec);
+            float nextCheckAt = Time.time;
+            while (dependencies.Controller.IsBusy)
+            {
+                context.LastKnownBasePosition = dependencies.Controller.Position;
+                MaintainHeldPayloadAlignment(context);
+                if (Time.time > deadline)
+                {
+                    dependencies.SetState?.Invoke(RobotRuntimeState.Stuck);
+                    Fail(context, MissionFailureReason.MoveTimeout, "Timed out while yielding for box exit clearance.");
+                    yield break;
+                }
+
+                if (Time.time >= nextCheckAt
+                    && IsPathBlockedByRobot(
+                        context,
+                        StudentConstants.NoStationId,
+                        targetPosition,
+                        out int currentBlockingRobotId,
+                        out _,
+                        out _)
+                    && (currentBlockingRobotId != blockingRobotId
+                        || !ActiveContextsByRobot.TryGetValue(
+                            blockingRobotId,
+                            out MissionContext blockingContext)
+                        || !IsMovingAwayFromBlockingRobot(
+                            dependencies.Controller.Position,
+                            targetPosition,
+                            blockingContext)))
+                {
+                    dependencies.Controller.MoveBaseTo(dependencies.Controller.Position);
+                    yield return WaitForControllerIdle(
+                        context,
+                        Mathf.Max(0.1f, settings.PathYieldMoveTimeoutSec),
+                        "box-exit yield stop");
+                    onArrived?.Invoke(false);
+                    yield break;
+                }
+
+                nextCheckAt = Time.time + Mathf.Max(0.01f, settings.BasePathCheckIntervalSec);
+                yield return null;
+            }
+
+            context.LastKnownBasePosition = dependencies.Controller.Position;
+            onArrived?.Invoke(true);
+        }
+
+        private static bool IsMovingAwayFromBlockingRobot(
+            Vector3 from,
+            Vector3 candidate,
+            MissionContext blockingContext)
+        {
+            if (blockingContext == null)
+            {
+                return false;
+            }
+
+            Vector3 blockingPosition = blockingContext.LastKnownBasePosition;
+            return DistanceXZ(candidate, blockingPosition)
+                >= DistanceXZ(from, blockingPosition) + 0.35f;
+        }
+
+        private static bool IsClearingBlockingMovePath(
+            Vector3 from,
+            Vector3 candidate,
+            MissionContext blockingContext)
+        {
+            if (blockingContext == null)
+            {
+                return false;
+            }
+
+            Vector3 blockingFrom = blockingContext.LastKnownBasePosition;
+            Vector3 blockingTo = blockingContext.CurrentMoveTarget;
+            if (DistanceXZ(blockingFrom, blockingTo) <= 0.25f)
+            {
+                return false;
+            }
+
+            float startDistance = PointSegmentDistanceXZ(from, blockingFrom, blockingTo);
+            float endDistance = PointSegmentDistanceXZ(candidate, blockingFrom, blockingTo);
+            return endDistance >= Mathf.Max(startDistance + 0.75f, 2.8f);
+        }
+
+        private static float PointSegmentDistanceXZ(
+            Vector3 point,
+            Vector3 segmentStart,
+            Vector3 segmentEnd)
+        {
+            Vector2 p = ToXZ(point);
+            Vector2 a = ToXZ(segmentStart);
+            Vector2 b = ToXZ(segmentEnd);
+            Vector2 ab = b - a;
+            float lengthSqr = ab.sqrMagnitude;
+            if (lengthSqr <= Mathf.Epsilon)
+            {
+                return Vector2.Distance(p, a);
+            }
+
+            float t = Mathf.Clamp01(Vector2.Dot(p - a, ab) / lengthSqr);
+            return Vector2.Distance(p, a + ab * t);
+        }
+
+        private static Vector2 ToXZ(Vector3 value)
+        {
+            return new Vector2(value.x, value.z);
         }
 
         private bool IsPathBlockedByRobot(
@@ -957,7 +2551,7 @@ namespace CPS.ICPBL.Student
                 return false;
             }
 
-            if (Time.time - blockedWaitStartedAt < Mathf.Max(0.1f, settings.BaseBlockedEscapeSec))
+            if (Time.time - blockedWaitStartedAt < GetBlockedEscapeDelay(context))
             {
                 return false;
             }
@@ -986,7 +2580,7 @@ namespace CPS.ICPBL.Student
                 return false;
             }
 
-            if (Time.time - blockedWaitStartedAt < Mathf.Max(0.1f, settings.BaseBlockedEscapeSec))
+            if (Time.time - blockedWaitStartedAt < GetBlockedEscapeDelay(context))
             {
                 return false;
             }
@@ -1057,7 +2651,7 @@ namespace CPS.ICPBL.Student
                 return false;
             }
 
-            if (Time.time - blockedWaitStartedAt < Mathf.Max(0.1f, settings.BaseBlockedEscapeSec))
+            if (Time.time - blockedWaitStartedAt < GetBlockedEscapeDelay(context))
             {
                 return false;
             }
@@ -1072,6 +2666,7 @@ namespace CPS.ICPBL.Student
 
         private void RegisterActiveBasePath(MissionContext context, Vector3 targetPosition)
         {
+            context.LastKnownBasePosition = dependencies.Controller.Position;
             dependencies.PathTrafficManager?.RegisterActiveBasePath(
                 context.Request.robotId,
                 context.Request.taskId,
@@ -1130,6 +2725,7 @@ namespace CPS.ICPBL.Student
                         to,
                         label,
                         false,
+                        false,
                         value => yielded = value);
 
                     currentFrom = dependencies.Controller.Position;
@@ -1179,7 +2775,58 @@ namespace CPS.ICPBL.Student
                 return false;
             }
 
-            return Time.time - waitStartedAt >= Mathf.Max(0.1f, settings.PathYieldWaitSec);
+            return Time.time - waitStartedAt >= GetBlockedEscapeDelay(context);
+        }
+
+        private float GetBaseStopSettleSec(MissionContext context, int blockingRobotId)
+        {
+            float settleSec = Mathf.Max(0f, settings.BaseStopSettleSec);
+            if (blockingRobotId == StudentConstants.UnassignedRobotId
+                || !TryGetActiveRobotPosition(blockingRobotId, out Vector3 blockingPosition))
+            {
+                return settleSec;
+            }
+
+            float distance = DistanceXZ(dependencies.Controller.Position, blockingPosition);
+            if (distance > Mathf.Max(0.1f, settings.CloseBlockSettleDistance))
+            {
+                return settleSec;
+            }
+
+            return Mathf.Max(settleSec, Mathf.Max(0f, settings.CloseBlockSettleSec));
+        }
+
+        private static bool TryGetActiveRobotPosition(int robotId, out Vector3 position)
+        {
+            position = Vector3.zero;
+            if (!ActiveContextsByRobot.TryGetValue(robotId, out MissionContext context)
+                || context == null)
+            {
+                return false;
+            }
+
+            position = context.LastKnownBasePosition;
+            return true;
+        }
+
+        private float GetBlockedEscapeDelay(MissionContext context)
+        {
+            if (context != null && !context.PayloadSecured)
+            {
+                return Mathf.Max(0.1f, settings.EmptyBaseBlockedEscapeSec);
+            }
+
+            return Mathf.Max(0.1f, settings.BaseBlockedEscapeSec);
+        }
+
+        private float GetPathYieldCooldown(MissionContext context)
+        {
+            if (context != null && !context.PayloadSecured)
+            {
+                return Mathf.Max(0.1f, settings.EmptyPathYieldCooldownSec);
+            }
+
+            return Mathf.Max(0.1f, settings.PathYieldCooldownSec);
         }
 
         private IEnumerator TryYieldFromBlockedPath(
@@ -1189,13 +2836,18 @@ namespace CPS.ICPBL.Student
             Vector3 originalTarget,
             string label,
             bool useSameBoxStagingCandidates,
+            bool useEmergencyYieldCandidates,
             Action<bool> onYielded)
         {
-            context.NextPathYieldAt = Time.time + Mathf.Max(0.1f, settings.PathYieldCooldownSec);
+            context.NextPathYieldAt = Time.time + GetPathYieldCooldown(context);
             IReadOnlyList<Vector3> candidates;
             if (useSameBoxStagingCandidates)
             {
                 candidates = BuildSameBoxStagingCandidates(context, originalTarget);
+            }
+            else if (useEmergencyYieldCandidates)
+            {
+                candidates = BuildEmergencyYieldCandidates(context, from, originalTarget);
             }
             else if (dependencies.PathPlanner != null)
             {
@@ -1211,9 +2863,13 @@ namespace CPS.ICPBL.Student
 
             float maxDetourDistanceRatio = useSameBoxStagingCandidates
                 ? Mathf.Max(1f, settings.SameBoxStagingMaxDistanceRatio)
+                : useEmergencyYieldCandidates
+                ? Mathf.Max(1f, settings.EmergencyYieldMaxDistanceRatio)
                 : 1.35f;
             float maxDetourDistanceExtra = useSameBoxStagingCandidates
                 ? Mathf.Max(0f, settings.SameBoxStagingMaxExtraDistance)
+                : useEmergencyYieldCandidates
+                ? Mathf.Max(0f, settings.EmergencyYieldMaxExtraDistance)
                 : 2f;
 
             for (int i = 0; i < candidates.Count; i++)
@@ -1228,17 +2884,24 @@ namespace CPS.ICPBL.Student
                 float directDistance = DistanceXZ(from, originalTarget);
                 float detourDistance = DistanceXZ(from, candidate)
                     + DistanceXZ(candidate, originalTarget);
+                float maxAllowedDetourDistance = useEmergencyYieldCandidates
+                    ? Mathf.Max(
+                        directDistance * maxDetourDistanceRatio,
+                        directDistance + maxDetourDistanceExtra)
+                    : Mathf.Min(
+                        directDistance * maxDetourDistanceRatio,
+                        directDistance + maxDetourDistanceExtra);
                 if (directDistance > 0.05f
-                    && (detourDistance > directDistance * maxDetourDistanceRatio
-                        || detourDistance > directDistance + maxDetourDistanceExtra))
+                    && detourDistance > maxAllowedDetourDistance)
                 {
                     LogMessage("Path", string.Format(
-                        "Yield candidate too expensive robot={0} task={1} label={2}; direct={3:0.00} detour={4:0.00}.",
+                        "Yield candidate too expensive robot={0} task={1} label={2}; direct={3:0.00} detour={4:0.00} limit={5:0.00}.",
                         context.Request.robotId,
                         context.Request.taskId,
                         label,
                         directDistance,
-                        detourDistance));
+                        detourDistance,
+                        maxAllowedDetourDistance));
                     continue;
                 }
 
@@ -1456,6 +3119,325 @@ namespace CPS.ICPBL.Student
             };
         }
 
+        private IReadOnlyList<Vector3> BuildEmergencyYieldCandidates(
+            MissionContext context,
+            Vector3 from,
+            Vector3 originalTarget)
+        {
+            emergencyYieldCandidates.Clear();
+            AddEmergencyBoxYieldCandidates(from, originalTarget);
+
+            float nearDistance = Mathf.Max(0.5f, settings.EmergencyYieldDistance);
+            float farDistance = Mathf.Max(nearDistance, settings.PathYieldDistance);
+            Vector3 direction = FlattenXZ(originalTarget - from);
+            if (direction.sqrMagnitude <= 0.0001f)
+            {
+                direction = Vector3.forward;
+            }
+
+            direction.Normalize();
+            Vector3 perpendicular = new Vector3(-direction.z, 0f, direction.x);
+            if (context.Request.robotId == StudentConstants.RobotBId)
+            {
+                perpendicular = -perpendicular;
+            }
+
+            Vector3 backward = -direction;
+            Vector3 diagonalA = (perpendicular + backward).normalized;
+            Vector3 diagonalB = (-perpendicular + backward).normalized;
+
+            AddEmergencyYieldCandidate(from + perpendicular * nearDistance);
+            AddEmergencyYieldCandidate(from - perpendicular * nearDistance);
+            AddEmergencyYieldCandidate(from + backward * nearDistance);
+            AddEmergencyYieldCandidate(from + diagonalA * nearDistance);
+            AddEmergencyYieldCandidate(from + diagonalB * nearDistance);
+            AddEmergencyYieldCandidate(from + perpendicular * farDistance);
+            AddEmergencyYieldCandidate(from - perpendicular * farDistance);
+            AddEmergencyYieldCandidate(from + backward * farDistance);
+            AddEmergencyYieldCandidate(from + diagonalA * farDistance);
+            AddEmergencyYieldCandidate(from + diagonalB * farDistance);
+
+            return emergencyYieldCandidates;
+        }
+
+        private void AddEmergencyBoxYieldCandidates(Vector3 from, Vector3 originalTarget)
+        {
+            const float boxNeighborhoodRadius = 6.5f;
+
+            if (TryGetStationBasePosition(
+                StudentConstants.NormalBoxStationId,
+                out Vector3 normalBoxPosition)
+                && (DistanceXZ(from, normalBoxPosition) <= boxNeighborhoodRadius
+                    || DistanceXZ(originalTarget, normalBoxPosition) <= boxNeighborhoodRadius))
+            {
+                AddOrderedEmergencyPair(
+                    from,
+                    normalBoxPosition + NormalBoxRobotAStagingOffset,
+                    normalBoxPosition + NormalBoxRobotBStagingOffset);
+                AddEmergencyYieldCandidate(FarNormalBoxApproachStagingPosition);
+            }
+
+            if (TryGetStationBasePosition(
+                StudentConstants.AbnormalBoxStationId,
+                out Vector3 abnormalBoxPosition)
+                && (DistanceXZ(from, abnormalBoxPosition) <= boxNeighborhoodRadius
+                    || DistanceXZ(originalTarget, abnormalBoxPosition) <= boxNeighborhoodRadius))
+            {
+                AddOrderedEmergencyPair(
+                    from,
+                    abnormalBoxPosition + AbnormalBoxRobotAStagingOffset,
+                    abnormalBoxPosition + AbnormalBoxRobotBStagingOffset);
+                AddEmergencyYieldCandidate(FarAbnormalBoxApproachStagingPosition);
+            }
+        }
+
+        private void AddOrderedEmergencyPair(Vector3 from, Vector3 first, Vector3 second)
+        {
+            if (DistanceXZ(from, first) <= DistanceXZ(from, second))
+            {
+                AddEmergencyYieldCandidate(first);
+                AddEmergencyYieldCandidate(second);
+                return;
+            }
+
+            AddEmergencyYieldCandidate(second);
+            AddEmergencyYieldCandidate(first);
+        }
+
+        private void AddEmergencyYieldCandidate(Vector3 candidate)
+        {
+            candidate = ClampYieldCandidate(candidate);
+            for (int i = 0; i < emergencyYieldCandidates.Count; i++)
+            {
+                if (DistanceXZ(emergencyYieldCandidates[i], candidate) <= 0.25f)
+                {
+                    return;
+                }
+            }
+
+            emergencyYieldCandidates.Add(candidate);
+        }
+
+        private static float CalculateRouteDistance(
+            Vector3 routeStart,
+            IReadOnlyList<Vector3> route)
+        {
+            float distance = 0f;
+            Vector3 previous = routeStart;
+            for (int i = 0; i < route.Count; i++)
+            {
+                distance += DistanceXZ(previous, route[i]);
+                previous = route[i];
+            }
+
+            return distance;
+        }
+
+        private static float ScoreCandidateClearanceFromActiveRobots(
+            MissionContext context,
+            Vector3 candidate,
+            float clearanceDistance,
+            float weight)
+        {
+            float score = 0f;
+            foreach (KeyValuePair<int, MissionContext> entry in ActiveContextsByRobot)
+            {
+                MissionContext other = entry.Value;
+                if (other == null
+                    || other == context
+                    || other.Request.robotId == context.Request.robotId)
+                {
+                    continue;
+                }
+
+                float distance = DistanceXZ(candidate, other.LastKnownBasePosition);
+                score += ClearancePenalty(distance, clearanceDistance, weight);
+            }
+
+            return score;
+        }
+
+        private static float ScorePointClearanceAgainstRoute(
+            Vector3 point,
+            Vector3 routeStart,
+            IReadOnlyList<Vector3> route,
+            float clearanceDistance,
+            float weight)
+        {
+            if (route.Count == 0)
+            {
+                return 0f;
+            }
+
+            float minDistance = float.PositiveInfinity;
+            Vector3 previous = routeStart;
+            for (int i = 0; i < route.Count; i++)
+            {
+                minDistance = Mathf.Min(
+                    minDistance,
+                    PointSegmentDistanceXZ(point, previous, route[i]));
+                previous = route[i];
+            }
+
+            return ClearancePenalty(minDistance, clearanceDistance, weight);
+        }
+
+        private static float ScoreRouteClearanceAgainstSegment(
+            Vector3 routeStart,
+            IReadOnlyList<Vector3> route,
+            Vector3 segmentStart,
+            Vector3 segmentEnd,
+            float clearanceDistance,
+            float weight)
+        {
+            if (route.Count == 0 || DistanceXZ(segmentStart, segmentEnd) <= 0.25f)
+            {
+                return 0f;
+            }
+
+            float minDistance = float.PositiveInfinity;
+            Vector3 previous = routeStart;
+            for (int i = 0; i < route.Count; i++)
+            {
+                minDistance = Mathf.Min(
+                    minDistance,
+                    SegmentDistanceXZ(previous, route[i], segmentStart, segmentEnd));
+                previous = route[i];
+            }
+
+            return ClearancePenalty(minDistance, clearanceDistance, weight);
+        }
+
+        private static float ScoreRouteClearanceAgainstRoute(
+            Vector3 routeStart,
+            IReadOnlyList<Vector3> route,
+            Vector3 otherRouteStart,
+            IReadOnlyList<Vector3> otherRoute,
+            float clearanceDistance,
+            float weight)
+        {
+            if (route.Count == 0 || otherRoute.Count == 0)
+            {
+                return 0f;
+            }
+
+            float minDistance = float.PositiveInfinity;
+            Vector3 previous = routeStart;
+            for (int i = 0; i < route.Count; i++)
+            {
+                Vector3 otherPrevious = otherRouteStart;
+                for (int otherIndex = 0; otherIndex < otherRoute.Count; otherIndex++)
+                {
+                    minDistance = Mathf.Min(
+                        minDistance,
+                        SegmentDistanceXZ(
+                            previous,
+                            route[i],
+                            otherPrevious,
+                            otherRoute[otherIndex]));
+                    otherPrevious = otherRoute[otherIndex];
+                }
+
+                previous = route[i];
+            }
+
+            return ClearancePenalty(minDistance, clearanceDistance, weight);
+        }
+
+        private static float ClearancePenalty(
+            float distance,
+            float clearanceDistance,
+            float weight)
+        {
+            if (distance >= clearanceDistance)
+            {
+                return 0f;
+            }
+
+            float shortfall = clearanceDistance - Mathf.Max(0f, distance);
+            float penalty = shortfall * weight;
+            if (distance < clearanceDistance * 0.6f)
+            {
+                penalty += weight;
+            }
+
+            return penalty;
+        }
+
+        private static float SegmentDistanceXZ(
+            Vector3 firstStart,
+            Vector3 firstEnd,
+            Vector3 secondStart,
+            Vector3 secondEnd)
+        {
+            if (SegmentsIntersectXZ(firstStart, firstEnd, secondStart, secondEnd))
+            {
+                return 0f;
+            }
+
+            return Mathf.Min(
+                Mathf.Min(
+                    PointSegmentDistanceXZ(firstStart, secondStart, secondEnd),
+                    PointSegmentDistanceXZ(firstEnd, secondStart, secondEnd)),
+                Mathf.Min(
+                    PointSegmentDistanceXZ(secondStart, firstStart, firstEnd),
+                    PointSegmentDistanceXZ(secondEnd, firstStart, firstEnd)));
+        }
+
+        private static bool SegmentsIntersectXZ(
+            Vector3 firstStart,
+            Vector3 firstEnd,
+            Vector3 secondStart,
+            Vector3 secondEnd)
+        {
+            Vector2 a = ToXZ(firstStart);
+            Vector2 b = ToXZ(firstEnd);
+            Vector2 c = ToXZ(secondStart);
+            Vector2 d = ToXZ(secondEnd);
+            float o1 = Cross(b - a, c - a);
+            float o2 = Cross(b - a, d - a);
+            float o3 = Cross(d - c, a - c);
+            float o4 = Cross(d - c, b - c);
+            const float epsilon = 0.0001f;
+
+            if (Mathf.Abs(o1) <= epsilon && IsOnSegmentXZ(a, c, b))
+            {
+                return true;
+            }
+
+            if (Mathf.Abs(o2) <= epsilon && IsOnSegmentXZ(a, d, b))
+            {
+                return true;
+            }
+
+            if (Mathf.Abs(o3) <= epsilon && IsOnSegmentXZ(c, a, d))
+            {
+                return true;
+            }
+
+            if (Mathf.Abs(o4) <= epsilon && IsOnSegmentXZ(c, b, d))
+            {
+                return true;
+            }
+
+            return (o1 > 0f) != (o2 > 0f)
+                && (o3 > 0f) != (o4 > 0f);
+        }
+
+        private static float Cross(Vector2 left, Vector2 right)
+        {
+            return left.x * right.y - left.y * right.x;
+        }
+
+        private static bool IsOnSegmentXZ(Vector2 start, Vector2 point, Vector2 end)
+        {
+            const float epsilon = 0.0001f;
+            return point.x >= Mathf.Min(start.x, end.x) - epsilon
+                && point.x <= Mathf.Max(start.x, end.x) + epsilon
+                && point.y >= Mathf.Min(start.y, end.y) - epsilon
+                && point.y <= Mathf.Max(start.y, end.y) + epsilon;
+        }
+
         private static Vector3 FlattenXZ(Vector3 value)
         {
             value.y = 0f;
@@ -1467,6 +3449,30 @@ namespace CPS.ICPBL.Student
             left.y = 0f;
             right.y = 0f;
             return Vector3.Distance(left, right);
+        }
+
+        private static Vector3 GetGridCellCenter(int cellNumber)
+        {
+            int safeCellNumber = Mathf.Max(1, cellNumber);
+            int zeroBased = safeCellNumber - 1;
+            int row = zeroBased / DebugGridColumnCount;
+            int column = zeroBased % DebugGridColumnCount;
+            return new Vector3(
+                DebugGridMinX + (column + 0.5f) * DebugGridCellSize,
+                0f,
+                DebugGridMinZ + (row + 0.5f) * DebugGridCellSize);
+        }
+
+        private static int GetGridCellNumber(Vector3 position)
+        {
+            int column = Mathf.FloorToInt((position.x - DebugGridMinX) / DebugGridCellSize);
+            int row = Mathf.FloorToInt((position.z - DebugGridMinZ) / DebugGridCellSize);
+            if (column < 0 || column >= DebugGridColumnCount || row < 0)
+            {
+                return StudentConstants.NoStationId;
+            }
+
+            return row * DebugGridColumnCount + column + 1;
         }
 
         private static Vector3 ClampYieldCandidate(Vector3 value)
@@ -1768,13 +3774,21 @@ namespace CPS.ICPBL.Student
             dependencies.Palletizer.CommitSlot(context.Request.taskId);
             context.SlotCommitted = true;
 
-            yield return MoveArmTo(context, context.ReservedSlot.retractPos, StudentConstants.DefaultArmMoveDurationSec, "place retract");
+            yield return MoveArmTo(context, GetSafePlaceRetractPosition(context), StudentConstants.DefaultArmMoveDurationSec, "place retract");
             if (context.Failed)
             {
                 yield break;
             }
 
             ReleaseKey(context, armKey);
+        }
+
+        private static Vector3 GetSafePlaceRetractPosition(MissionContext context)
+        {
+            Vector3 retractPosition = context.ReservedSlot.retractPos;
+            float readyHeight = context.ReservedSlot.approachPos.y + 0.25f;
+            retractPosition.y = Mathf.Max(retractPosition.y, readyHeight);
+            return retractPosition;
         }
 
         private IEnumerator MoveArmTo(
@@ -1843,7 +3857,7 @@ namespace CPS.ICPBL.Student
                 {
                     dependencies.LockManager.Release(token);
                     context.LockTokens.RemoveAt(i);
-                    dependencies.TelemetryLogger?.LogLock(
+            dependencies.TelemetryLogger?.LogLock(
                         "Release",
                         key,
                         context.Request.robotId,
@@ -1851,6 +3865,81 @@ namespace CPS.ICPBL.Student
                     return;
                 }
             }
+        }
+
+        private void SetCurrentMoveContext(
+            MissionContext context,
+            int stationId,
+            Vector3 targetPosition,
+            string label)
+        {
+            if (context == null)
+            {
+                return;
+            }
+
+            context.CurrentMoveLabel = label ?? string.Empty;
+            context.CurrentMoveStationId = stationId;
+            context.CurrentMoveTarget = targetPosition;
+            context.LastKnownBasePosition = dependencies.Controller.Position;
+        }
+
+        private static void ClearCurrentMoveContext(MissionContext context, string label)
+        {
+            if (context == null
+                || !string.Equals(context.CurrentMoveLabel, label, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            context.CurrentMoveLabel = string.Empty;
+            context.CurrentMoveStationId = StudentConstants.NoStationId;
+            context.CurrentMoveTarget = Vector3.zero;
+        }
+
+        private static void RegisterActiveMission(MissionContext context)
+        {
+            if (context == null || context.Request == null)
+            {
+                return;
+            }
+
+            ActiveContextsByRobot[context.Request.robotId] = context;
+        }
+
+        private static void UnregisterActiveMission(MissionContext context)
+        {
+            if (context == null || context.Request == null)
+            {
+                return;
+            }
+
+            if (ActiveContextsByRobot.TryGetValue(
+                context.Request.robotId,
+                out MissionContext activeContext)
+                && activeContext == context)
+            {
+                ActiveContextsByRobot.Remove(context.Request.robotId);
+            }
+        }
+
+        private static bool HasLock(MissionContext context, ResourceKey key)
+        {
+            if (context == null)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < context.LockTokens.Count; i++)
+            {
+                ResourceLockToken token = context.LockTokens[i];
+                if (token != null && token.key == key)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private void ReleaseAllLocks(MissionContext context)
@@ -1883,6 +3972,7 @@ namespace CPS.ICPBL.Student
         private void Finish(MissionContext context, Action<MissionResult> onFinished)
         {
             ClearActiveBasePath(context);
+            UnregisterActiveMission(context);
 
             if (context.Failed)
             {

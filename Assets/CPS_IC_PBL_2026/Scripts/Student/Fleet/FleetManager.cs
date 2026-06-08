@@ -47,6 +47,8 @@ namespace CPS.ICPBL.Student
             new Dictionary<int, WorkTask>();
         private readonly Dictionary<int, StudentRobotSnapshot> snapshotByRobot =
             new Dictionary<int, StudentRobotSnapshot>();
+        private readonly Dictionary<int, MissionRequest> activeRequestByRobot =
+            new Dictionary<int, MissionRequest>();
         private readonly HashSet<int> completedInitialConveyorRobotIds = new HashSet<int>();
         private readonly List<IRobotAgent> robotAgents = new List<IRobotAgent>(2);
         private readonly List<WorkTask> tasks = new List<WorkTask>();
@@ -207,7 +209,9 @@ namespace CPS.ICPBL.Student
                 lastAssignedAtByConveyor);
 
             RefreshPendingTasks(LatestSnapshots);
+            UpdatePredictedNextConveyorRequests(LatestSnapshots);
             DispatchAvailableRobots(LatestSnapshots);
+            UpdatePredictedNextConveyorRequests(LatestSnapshots);
             return LatestSnapshots;
         }
 
@@ -546,6 +550,8 @@ namespace CPS.ICPBL.Student
                 timeoutSec = StudentConstants.DefaultMissionTimeoutSec,
                 onProgress = progress => OnMissionProgress(task.taskId, progress)
             };
+            activeRequestByRobot[robotId] = request;
+            UpdatePredictedNextConveyorRequest(robotAgent, LatestSnapshots);
 
             task.status = TaskStatus.Running;
             try
@@ -632,6 +638,8 @@ namespace CPS.ICPBL.Student
                 result = CreateDispatchFailure(task, "Mission callback did not match assigned task and robot.");
             }
 
+            activeRequestByRobot.Remove(task.assignedRobotId);
+
             if (!task.conveyorPicked)
             {
                 ReleaseReservation(task.conveyorId);
@@ -680,6 +688,43 @@ namespace CPS.ICPBL.Student
                 "Failed task={0} after retryCount={1}.",
                 task.taskId,
                 task.retryCount));
+        }
+
+        private void UpdatePredictedNextConveyorRequests(ConveyorSnapshot[] snapshots)
+        {
+            for (int i = 0; i < robotAgents.Count; i++)
+            {
+                UpdatePredictedNextConveyorRequest(robotAgents[i], snapshots);
+            }
+        }
+
+        private void UpdatePredictedNextConveyorRequest(
+            IRobotAgent robotAgent,
+            ConveyorSnapshot[] snapshots)
+        {
+            if (robotAgent == null
+                || taskAllocator == null
+                || !activeRequestByRobot.TryGetValue(robotAgent.RobotId, out MissionRequest request)
+                || request == null)
+            {
+                return;
+            }
+
+            WorkTask[] pendingTasks = BuildPendingTaskArray(robotAgent);
+            if (pendingTasks.Length == 0)
+            {
+                request.predictedNextConveyorId = StudentConstants.NoStationId;
+                return;
+            }
+
+            WorkTask selectedTask = taskAllocator.SelectBestTask(
+                snapshots,
+                GetRobotSnapshot(robotAgent),
+                pendingTasks,
+                true);
+            request.predictedNextConveyorId = selectedTask != null
+                ? selectedTask.conveyorId
+                : StudentConstants.NoStationId;
         }
 
         private void TryRequestTerminalParking(WorkTask task)
