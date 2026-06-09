@@ -6042,7 +6042,7 @@ MonoBehaviour:
   BOTH_IDLE_THRESHOLD: 50
   includeIdleInScore: 0
   CONFLICT_PENALTY_CAP: 5
-  maxSimulationDuration: 300
+  maxSimulationDuration: 400
   spawnSystem: {fileID: 1504378415}
   normalBox: {fileID: 242586149}
   abnormalBox: {fileID: 196160528}
@@ -7890,11 +7890,13 @@ MonoBehaviour:
   telemetryLoggerComponent: {fileID: 0}
   moveTimeoutSec: 15
   lockTimeoutSec: 5
-  gripReadyTimeoutSec: 3
-  gripRetryWaitSec: 0.2
+  gripReadyTimeoutSec: 1
+  gripRetryWaitSec: 0.08
   gripRetryCount: 1
   colorRetryWaitSec: 0.1
   colorRetryCount: 1
+  postPlaceArmRaiseDurationSec: 0.22
+  postPlaceArmReadyMinHeight: 1.75
   logWithoutTelemetry: 1
   debugConveyorId: 1
   debugTaskId: 9001
@@ -8366,22 +8368,22 @@ MonoBehaviour:
   requireCentralZoneForBoxAccess: 1
   requireCentralZoneForBoxToCornerConveyors: 1
   enableSegmentReservation: 1
-  segmentClearanceRadius: 2.6
-  stationaryClearanceRadius: 2.5
-  hardSegmentClearanceRadius: 1.8
-  hardStationaryClearanceRadius: 1.8
+  segmentClearanceRadius: 3
+  stationaryClearanceRadius: 2.9
+  hardSegmentClearanceRadius: 2.05
+  hardStationaryClearanceRadius: 2.05
   reservationStaleSec: 8
   enableTemporalConflictCheck: 1
   estimatedBaseSpeed: 7.5
-  conflictTimeWindowSec: 0.9
-  movingBlockDistance: 2.35
-  movingResumeDistance: 2.8
-  stationaryWorkClearanceRadius: 3.2
-  ignoreBehindDistance: 0.35
+  conflictTimeWindowSec: 1.15
+  movingBlockDistance: 2.75
+  movingResumeDistance: 3.2
+  stationaryWorkClearanceRadius: 3.6
+  ignoreBehindDistance: 0.2
   stopImmediatelyForLowerPriorityCrossing: 1
-  crossingHoldDistance: 3
-  crossingPriorityMargin: 0.8
-  pathStartPriorityMarginSec: 0.15
+  crossingHoldDistance: 3.8
+  crossingPriorityMargin: 1
+  pathStartPriorityMarginSec: 0.3
   activePathStaleSec: 45
   enableLaneRouting: 0
   robotALaneX: -7.2
@@ -8389,7 +8391,7 @@ MonoBehaviour:
   lowerLaneZ: -7.4
   upperLaneZ: 9.3
   waypointMergeDistance: 0.6
-  detourDistance: 4.5
+  detourDistance: 3
   worldMinX: -9.5
   worldMaxX: 10.5
   worldMinZ: -8
@@ -8501,11 +8503,11 @@ MonoBehaviour:
   conveyorApproachOffset: {x: 0, y: 0.25, z: 0}
   conveyorActionOffset: {x: 0, y: -0.35, z: 0}
   conveyorRetractOffset: {x: 0, y: 0.35, z: 0}
-  conveyorArmMoveDuration: 0.4
+  conveyorArmMoveDuration: 0.22
   boxApproachOffset: {x: 0, y: 0.55, z: 0}
   boxActionOffset: {x: 0, y: 0.2, z: 0}
   boxRetractOffset: {x: 0, y: 0.65, z: 0}
-  boxArmMoveDuration: 0.4
+  boxArmMoveDuration: 0.22
   conveyorPickOverrides: []
   normalBoxBaseOverride:
     stationId: 0
@@ -8782,11 +8784,13 @@ MonoBehaviour:
   telemetryLoggerComponent: {fileID: 0}
   moveTimeoutSec: 15
   lockTimeoutSec: 5
-  gripReadyTimeoutSec: 3
-  gripRetryWaitSec: 0.2
+  gripReadyTimeoutSec: 1
+  gripRetryWaitSec: 0.08
   gripRetryCount: 1
   colorRetryWaitSec: 0.1
   colorRetryCount: 1
+  postPlaceArmRaiseDurationSec: 0.22
+  postPlaceArmReadyMinHeight: 1.75
   logWithoutTelemetry: 1
   debugConveyorId: 1
   debugTaskId: 9001
