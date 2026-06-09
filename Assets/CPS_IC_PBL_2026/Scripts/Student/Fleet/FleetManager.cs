@@ -33,9 +33,9 @@ namespace CPS.ICPBL.Student
         [Header("Terminal Parking")]
         [SerializeField] private bool enableTerminalParking = true;
         [SerializeField, Min(1)] private int terminalParkingCompletionIndex = 63;
-        [SerializeField] private Vector3 terminalParkingPosition = new Vector3(-9.6f, 0f, -7.4f);
+        [SerializeField] private Vector3 terminalParkingPosition = new Vector3(10.5f, 0f, -7.5f);
         private static readonly Vector3 SafeTerminalParkingPosition =
-            new Vector3(-9.6f, 0f, -7.4f);
+            new Vector3(10.5f, 0f, -7.5f);
         private const float TerminalParkingCriticalPathClearance = 4.5f;
         private const int LatestSafeTerminalParkingCompletionIndex = 63;
 
@@ -775,7 +775,7 @@ namespace CPS.ICPBL.Student
         {
             Vector3 configured = terminalParkingPosition;
             configured.y = 0f;
-            if (IsTerminalParkingCornerPosition(configured)
+            if (IsTerminalParkingCell8Position(configured)
                 && IsTerminalParkingPositionClear(configured))
             {
                 return configured;
@@ -790,9 +790,10 @@ namespace CPS.ICPBL.Student
             return SafeTerminalParkingPosition;
         }
 
-        private static bool IsTerminalParkingCornerPosition(Vector3 position)
+        private static bool IsTerminalParkingCell8Position(Vector3 position)
         {
-            return Mathf.Abs(position.x) >= 8.8f && position.z <= -6.8f;
+            return position.x >= 9f && position.x <= 12f
+                && position.z >= -9f && position.z <= -6f;
         }
 
         private static bool IsTerminalParkingPositionClear(Vector3 position)

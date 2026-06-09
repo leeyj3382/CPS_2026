@@ -8310,7 +8310,7 @@ MonoBehaviour:
   robotBInitialConveyorId: 4
   enableTerminalParking: 1
   terminalParkingCompletionIndex: 63
-  terminalParkingPosition: {x: 6.2, y: 0, z: -5.2}
+  terminalParkingPosition: {x: 10.5, y: 0, z: -7.5}
 --- !u!114 &2140976385
 MonoBehaviour:
   m_ObjectHideFlags: 0

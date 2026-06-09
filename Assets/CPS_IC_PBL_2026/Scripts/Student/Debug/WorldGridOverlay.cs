@@ -10,6 +10,8 @@ namespace CPS.ICPBL.Student
     public sealed class WorldGridOverlay : MonoBehaviour
     {
         private const float DefaultCellSize = 3f;
+        private const int DefaultLabelFontSize = 32;
+        private const float DefaultLabelCharacterSize = 0.12f;
         private static readonly Vector2 DefaultXRange = new Vector2(-12f, 12f);
         private static readonly Vector2 DefaultZRange = new Vector2(-9f, 12f);
         private static readonly Color DefaultLineColor = new Color(0.85f, 0.85f, 0.85f, 0.5f);
@@ -27,8 +29,8 @@ namespace CPS.ICPBL.Student
         [SerializeField, Min(0.001f)] private float lineWidth = 0.025f;
         [SerializeField] private Color lineColor = DefaultLineColor;
         [SerializeField] private Color labelColor = DefaultLabelColor;
-        [SerializeField, Min(1)] private int labelFontSize = 48;
-        [SerializeField, Min(0.01f)] private float labelCharacterSize = 0.3f;
+        [SerializeField, Min(1)] private int labelFontSize = DefaultLabelFontSize;
+        [SerializeField, Min(0.01f)] private float labelCharacterSize = DefaultLabelCharacterSize;
         [SerializeField] private bool billboardLabels = true;
 
         private readonly List<Transform> labels = new List<Transform>(128);
@@ -144,7 +146,8 @@ namespace CPS.ICPBL.Student
 
             GUIStyle labelStyle = new GUIStyle(EditorStyles.boldLabel)
             {
-                alignment = TextAnchor.MiddleCenter
+                alignment = TextAnchor.MiddleCenter,
+                fontSize = 12
             };
             labelStyle.normal.textColor = labelColor;
 
