@@ -7,6 +7,7 @@ namespace CPS.ICPBL.Student
     public class Palletizer : MonoBehaviour, IPalletizer
     {
         private const float MinSlotSpacing = 0.01f;
+        private const float SuctionFaceOffsetFromAttachPoint = 0f;
 
         private enum SlotState
         {
@@ -55,12 +56,15 @@ namespace CPS.ICPBL.Student
         [SerializeField] private float layerHeight = 0.25f;
         [SerializeField] private float productSize = 0.25f;
         [SerializeField] private float sideClearance = 0.06f;
-        [SerializeField] private float bottomClearance = 0.01f;
+        [SerializeField] private float bottomClearance = 0f;
         [SerializeField] private Vector3 normalGridOriginOffset = new Vector3(-0.8f, 0f, -0.48f);
         [SerializeField] private Vector3 abnormalGridOriginOffset = new Vector3(-0.8f, 0f, -0.48f);
+        [SerializeField] private Vector3 abnormalBoundsGridOffset = new Vector3(-0.04f, 0f, 0f);
         [SerializeField] private bool fitGridToBoxBounds = true;
         [SerializeField] private float horizontalPadding = 0.2f;
-        [SerializeField] private float verticalPadding = 0.135f;
+        [SerializeField] private float normalExtraHorizontalPadding = 0f;
+        [SerializeField] private float abnormalExtraHorizontalPadding = 0f;
+        [SerializeField] private float verticalPadding = 0.125f;
 
         [Header("Place Offsets")]
         [SerializeField] private Vector3 placeApproachOffset = new Vector3(0f, 0.35f, 0f);
@@ -218,6 +222,8 @@ namespace CPS.ICPBL.Student
             sideClearance = Mathf.Max(0f, sideClearance);
             bottomClearance = Mathf.Max(0f, bottomClearance);
             horizontalPadding = Mathf.Max(0f, horizontalPadding);
+            normalExtraHorizontalPadding = Mathf.Max(0f, normalExtraHorizontalPadding);
+            abnormalExtraHorizontalPadding = Mathf.Max(0f, abnormalExtraHorizontalPadding);
             verticalPadding = Mathf.Max(0f, verticalPadding);
             gizmoRadius = Mathf.Max(0.01f, gizmoRadius);
         }
@@ -274,7 +280,8 @@ namespace CPS.ICPBL.Student
 
         private BoxSlotPose BuildSlotPose(BoxType boxType, int slotIndex, int taskId)
         {
-            Vector3 placePos = GetSlotWorldPosition(boxType, slotIndex);
+            Vector3 productCenterPos = GetSlotWorldPosition(boxType, slotIndex);
+            Vector3 placePos = GetToolPlacePosition(productCenterPos);
             return new BoxSlotPose
             {
                 boxType = boxType,
@@ -282,10 +289,17 @@ namespace CPS.ICPBL.Student
                 slotIndex = slotIndex,
                 approachPos = ApplyVerticalOffset(placePos, placeApproachOffset),
                 placePos = placePos,
+                productCenterPos = productCenterPos,
                 retractPos = ApplyVerticalOffset(placePos, placeRetractOffset),
                 reserved = true,
                 reservedByTaskId = taskId
             };
+        }
+
+        private Vector3 GetToolPlacePosition(Vector3 productCenterPos)
+        {
+            float verticalToolOffset = (productSize * 0.5f) + SuctionFaceOffsetFromAttachPoint;
+            return productCenterPos + Vector3.up * verticalToolOffset;
         }
 
         private static Vector3 ApplyVerticalOffset(Vector3 basePos, Vector3 offset)
@@ -303,7 +317,10 @@ namespace CPS.ICPBL.Student
             if (fitGridToBoxBounds && TryGetBoxBounds(boxType, out Bounds boxBounds))
             {
                 SlotGrid grid = BuildBoundsGrid(boxType, boxBounds);
-                return GetGridPosition(grid, slotIndex);
+                Vector3 gridPosition = GetGridPosition(grid, slotIndex);
+                return boxType == BoxType.Abnormal
+                    ? gridPosition + abnormalBoundsGridOffset
+                    : gridPosition;
             }
 
             Vector3 basePosition = Vector3.zero;
@@ -344,14 +361,12 @@ namespace CPS.ICPBL.Student
             float stepX = Mathf.Max(MinSlotSpacing, slotSpacing.x);
             float stepZ = Mathf.Max(MinSlotSpacing, slotSpacing.z);
             float stepY = Mathf.Max(Mathf.Max(MinSlotSpacing, layerHeight), productSize);
-            float horizontalCenterInset = GetHorizontalCenterInset();
+            float horizontalCenterInset = GetHorizontalCenterInset(boxType);
             float verticalCenterInset = GetVerticalCenterInset();
             bool majorAxisIsX = boxBounds.size.x >= boxBounds.size.z;
 
             int majorCount = GetConfiguredMajorCount(boxType);
             int minorCount = GetConfiguredMinorCount(boxType);
-            float majorStep = majorAxisIsX ? stepX : stepZ;
-            float minorStepMagnitude = majorAxisIsX ? stepZ : stepX;
             float majorMin = majorAxisIsX
                 ? boxBounds.min.x + horizontalCenterInset
                 : boxBounds.min.z + horizontalCenterInset;
@@ -364,6 +379,16 @@ namespace CPS.ICPBL.Student
             float minorMax = majorAxisIsX
                 ? boxBounds.max.z - horizontalCenterInset
                 : boxBounds.max.x - horizontalCenterInset;
+            float majorStep = GetFittedStep(
+                majorMin,
+                majorMax,
+                majorCount,
+                majorAxisIsX ? stepX : stepZ);
+            float minorStepMagnitude = GetFittedStep(
+                minorMin,
+                minorMax,
+                minorCount,
+                majorAxisIsX ? stepZ : stepX);
             float majorStart = GetCenteredStart(majorMin, majorMax, majorCount, majorStep);
             float minorStart = GetMinorStart(boxType, minorMin, minorMax, minorCount, majorAxisIsX, minorStepMagnitude);
             float minorStep = GetOutsideMinorStep(boxType, majorAxisIsX, minorStepMagnitude);
@@ -397,9 +422,16 @@ namespace CPS.ICPBL.Student
                 : Mathf.Max(1, rows);
         }
 
-        private float GetHorizontalCenterInset()
+        private float GetHorizontalCenterInset(BoxType boxType)
         {
-            return Mathf.Max(horizontalPadding, productSize * 0.5f + sideClearance);
+            float extraPadding = boxType == BoxType.Normal
+                ? normalExtraHorizontalPadding
+                : boxType == BoxType.Abnormal
+                    ? abnormalExtraHorizontalPadding
+                    : 0f;
+            return Mathf.Max(
+                horizontalPadding + extraPadding,
+                productSize * 0.5f + sideClearance);
         }
 
         private float GetVerticalCenterInset()
@@ -411,6 +443,25 @@ namespace CPS.ICPBL.Student
         {
             float span = Mathf.Max(0f, (Mathf.Max(1, count) - 1) * step);
             return (min + max - span) * 0.5f;
+        }
+
+        private static float GetFittedStep(float min, float max, int count, float desiredStep)
+        {
+            int clampedCount = Mathf.Max(1, count);
+            if (clampedCount <= 1)
+            {
+                return 0f;
+            }
+
+            float usableSpan = Mathf.Max(0f, max - min);
+            if (usableSpan <= Mathf.Epsilon)
+            {
+                return Mathf.Max(MinSlotSpacing, desiredStep);
+            }
+
+            return Mathf.Max(
+                MinSlotSpacing,
+                Mathf.Min(Mathf.Max(MinSlotSpacing, desiredStep), usableSpan / (clampedCount - 1)));
         }
 
         private static Vector3 GetGridPosition(SlotGrid grid, int slotIndex)
@@ -494,7 +545,7 @@ namespace CPS.ICPBL.Student
 
             SlotGrid grid = BuildBoundsGrid(boxType, boxBounds);
             int capacity = Mathf.Max(1, grid.MajorCount * grid.MinorCount * grid.Layers);
-            return slotIndex < Mathf.Max(capacity, GetSlots(boxType).Length);
+            return slotIndex < capacity;
         }
 
         private void RegisterBoxTriggerSlot(BoxType boxType, int slotIndex)

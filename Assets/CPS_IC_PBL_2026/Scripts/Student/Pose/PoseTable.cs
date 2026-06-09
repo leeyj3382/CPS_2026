@@ -8,13 +8,20 @@ namespace CPS.ICPBL.Student
     public class PoseTable : MonoBehaviour, IPoseProvider
     {
         private const float MinArmMoveDuration = 0.01f;
+        private const float ConveyorProductCenterBelowAnchor = 0.3f;
+        private const float ProductHalfHeight = 0.125f;
+        private const float SuctionFaceOffsetFromAttachPoint = 0f;
+        private const float PickContactInset = 0.001f;
 
         [Header("Optional Base Station Source")]
         [SerializeField] private OperatingStations operatingStations;
 
         [Header("Conveyor Pick Offsets")]
         [SerializeField] private Vector3 conveyorApproachOffset = new Vector3(0f, 0.25f, 0f);
-        [SerializeField] private Vector3 conveyorActionOffset = new Vector3(0f, -0.35f, 0f);
+        [SerializeField] private Vector3 conveyorActionOffset = new Vector3(
+            0f,
+            -ConveyorProductCenterBelowAnchor + ProductHalfHeight + SuctionFaceOffsetFromAttachPoint - PickContactInset,
+            0f);
         [SerializeField] private Vector3 conveyorRetractOffset = new Vector3(0f, 0.35f, 0f);
         [SerializeField] private float conveyorArmMoveDuration = StudentConstants.DefaultArmMoveDurationSec;
 

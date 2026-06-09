@@ -123,6 +123,12 @@ namespace CPS.ICPBL.Student
         private static readonly Dictionary<int, MissionContext> ActiveContextsByRobot =
             new Dictionary<int, MissionContext>();
         private const float NormalBoxApproachExtraDistance = 0.3f;
+        private const float CandidatePickContactInset = 0.002f;
+        private const float GripContactRecoveryStep = 0.025f;
+        private const float MaxCandidatePickHorizontalCorrection = 0.28f;
+        private const float MaxCandidatePickVerticalCorrection = 0.18f;
+        private const float SameBoxCloseYieldDelaySec = 0.35f;
+        private static readonly float PostReleaseVerticalSettleSec = 0.08f;
         private const float DebugGridCellSize = 3f;
         private const float DebugGridMinX = -12f;
         private const float DebugGridMinZ = -9f;
@@ -175,7 +181,6 @@ namespace CPS.ICPBL.Student
                     "conveyor station");
             }
 
-            ReleaseKey(context, conveyorChokeKey);
             ReleaseKey(context, new ResourceKey(
                 LockResourceType.CentralZone,
                 StudentConstants.CentralZoneResourceId));
@@ -203,6 +208,11 @@ namespace CPS.ICPBL.Student
             if (!context.Failed)
             {
                 yield return RunClassification(context);
+            }
+
+            if (!context.Failed)
+            {
+                ReserveDestinationSlot(context);
             }
 
             if (!context.Failed)
@@ -1731,8 +1741,12 @@ namespace CPS.ICPBL.Student
         {
             float movingDeadline = Time.time + Mathf.Max(0f, settings.MoveTimeoutSec);
             float nextCheckAt = Time.time;
+            bool isBoxCloseApproach =
+                string.Equals(label, "normal box close approach", StringComparison.Ordinal);
             bool releaseBoxApproachWhileBlocked =
-                settings.EnableBoxApproachGate && StudentConstants.IsBoxStationId(stationId);
+                settings.EnableBoxApproachGate
+                && StudentConstants.IsBoxStationId(stationId)
+                && !isBoxCloseApproach;
             ResourceKey boxApproachKey = releaseBoxApproachWhileBlocked
                 ? GetBoxApproachKey(stationId)
                 : default;
@@ -1848,6 +1862,32 @@ namespace CPS.ICPBL.Student
                             }
 
                             if (yieldedForBoxExit)
+                            {
+                                blockedWaitStartedAt = Time.time;
+                                break;
+                            }
+                        }
+
+                        if (CanAttemptSameBoxCloseYield(
+                            context,
+                            blockingRobotId,
+                            stationId,
+                            label,
+                            blockedWaitStartedAt))
+                        {
+                            bool yieldedForSameBoxClose = false;
+                            yield return TryYieldForPayloadBoxApproach(
+                                context,
+                                stationId,
+                                targetPosition,
+                                blockingRobotId,
+                                value => yieldedForSameBoxClose = value);
+                            if (context.Failed)
+                            {
+                                yield break;
+                            }
+
+                            if (yieldedForSameBoxClose)
                             {
                                 blockedWaitStartedAt = Time.time;
                                 break;
@@ -2563,6 +2603,54 @@ namespace CPS.ICPBL.Student
                 out preferDetour);
         }
 
+        private bool CanAttemptSameBoxCloseYield(
+            MissionContext context,
+            int blockingRobotId,
+            int targetStationId,
+            string label,
+            float blockedWaitStartedAt)
+        {
+            if (!context.PayloadSecured
+                || blockingRobotId == StudentConstants.UnassignedRobotId
+                || !StudentConstants.IsBoxStationId(targetStationId)
+                || !string.Equals(label, "box station", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            if (Time.time - blockedWaitStartedAt < SameBoxCloseYieldDelaySec
+                || Time.time < context.NextPathYieldAt
+                || context.PathYieldAttempts >= Mathf.Max(0, settings.PathYieldMaxAttempts))
+            {
+                return false;
+            }
+
+            return ActiveContextsByRobot.TryGetValue(
+                    blockingRobotId,
+                    out MissionContext blockingContext)
+                && blockingContext != null
+                && blockingContext.PayloadSecured
+                && blockingContext.Result.destinationStationId == context.Result.destinationStationId
+                && ShouldYieldToSameBoxPeer(context, blockingContext);
+        }
+
+        private static bool ShouldYieldToSameBoxPeer(
+            MissionContext context,
+            MissionContext blockingContext)
+        {
+            if (context == null || blockingContext == null)
+            {
+                return false;
+            }
+
+            if (context.Request.taskId != blockingContext.Request.taskId)
+            {
+                return context.Request.taskId > blockingContext.Request.taskId;
+            }
+
+            return context.Request.robotId > blockingContext.Request.robotId;
+        }
+
         private bool CanAttemptDynamicDetour(
             MissionContext context,
             int blockingRobotId,
@@ -2913,7 +3001,7 @@ namespace CPS.ICPBL.Student
                 float directDistance = DistanceXZ(from, originalTarget);
                 float detourDistance = DistanceXZ(from, candidate)
                     + DistanceXZ(candidate, originalTarget);
-                float maxAllowedDetourDistance = useEmergencyYieldCandidates
+                float maxAllowedDetourDistance = useEmergencyYieldCandidates || useSameBoxStagingCandidates
                     ? Mathf.Max(
                         directDistance * maxDetourDistanceRatio,
                         directDistance + maxDetourDistanceExtra)
@@ -3568,7 +3656,21 @@ namespace CPS.ICPBL.Student
                 yield break;
             }
 
-            yield return GripWithRetry(context);
+            dependencies.Gripper.ClearSensorCandidates();
+            yield return new WaitForFixedUpdate();
+
+            yield return MoveArmToCurrentCandidatePickTarget(
+                context,
+                pose.actionPos,
+                pose.armMoveDuration,
+                0,
+                "pick candidate align");
+            if (context.Failed)
+            {
+                yield break;
+            }
+
+            yield return GripWithRetry(context, pose.actionPos, pose.armMoveDuration);
             if (context.Failed)
             {
                 yield break;
@@ -3621,11 +3723,17 @@ namespace CPS.ICPBL.Student
             }
         }
 
-        private IEnumerator GripWithRetry(MissionContext context)
+        private IEnumerator GripWithRetry(
+            MissionContext context,
+            Vector3 nominalActionPos,
+            float armMoveDuration)
         {
             int attempts = Mathf.Max(0, settings.GripRetryCount) + 1;
             for (int attempt = 0; attempt < attempts; attempt++)
             {
+                dependencies.Gripper.ClearSensorCandidates();
+                yield return new WaitForFixedUpdate();
+
                 yield return dependencies.Gripper.WaitUntilGraspReady(settings.GripReadyTimeoutSec);
                 if (dependencies.Gripper.TryGrip(out string reason))
                 {
@@ -3640,20 +3748,129 @@ namespace CPS.ICPBL.Student
                     yield break;
                 }
 
+                string failureReason = string.IsNullOrEmpty(reason)
+                    ? dependencies.Gripper.LastFailureReason
+                    : reason;
                 LogMessage("Grip", string.Format(
                     "Grip failed task={0} robot={1} attempt={2}, reason={3}.",
                     context.Request.taskId,
                     context.Request.robotId,
                     attempt + 1,
-                    string.IsNullOrEmpty(reason) ? dependencies.Gripper.LastFailureReason : reason));
+                    failureReason));
 
                 if (attempt + 1 < attempts)
                 {
+                    if (IsRecoverableGripMiss(failureReason))
+                    {
+                        yield return MoveArmToCurrentCandidatePickTarget(
+                            context,
+                            nominalActionPos,
+                            armMoveDuration,
+                            attempt + 1,
+                            "pick contact recovery");
+                        if (context.Failed)
+                        {
+                            yield break;
+                        }
+                    }
+
                     yield return new WaitForSeconds(Mathf.Max(0f, settings.GripRetryWaitSec));
                 }
             }
 
             Fail(context, MissionFailureReason.GripFailed, dependencies.Gripper.LastFailureReason);
+        }
+
+        private IEnumerator MoveArmToCurrentCandidatePickTarget(
+            MissionContext context,
+            Vector3 nominalActionPos,
+            float armMoveDuration,
+            int recoveryStep,
+            string label)
+        {
+            if (dependencies.Gripper == null)
+            {
+                yield break;
+            }
+
+            bool hasCandidate = dependencies.Gripper.TryGetCurrentCandidatePickTarget(
+                CandidatePickContactInset,
+                out Vector3 candidateTarget);
+            if (!hasCandidate)
+            {
+                if (recoveryStep <= 0)
+                {
+                    LogMessage("Grip", string.Format(
+                        "Skipped {0} task={1} robot={2}; no current candidate.",
+                        label,
+                        context.Request.taskId,
+                        context.Request.robotId));
+                    yield break;
+                }
+
+                candidateTarget = nominalActionPos;
+            }
+
+            candidateTarget.y -= Mathf.Max(0, recoveryStep) * GripContactRecoveryStep;
+            if (hasCandidate && !IsCandidatePickCorrectionSafe(nominalActionPos, candidateTarget))
+            {
+                LogMessage("Grip", string.Format(
+                    "Fallback {0} task={1} robot={2}; candidate correction unsafe nominal={3} candidate={4}.",
+                    label,
+                    context.Request.taskId,
+                    context.Request.robotId,
+                    nominalActionPos,
+                    candidateTarget));
+                candidateTarget = nominalActionPos
+                    + Vector3.down * (Mathf.Max(0, recoveryStep) * GripContactRecoveryStep);
+            }
+
+            if (!IsFallbackPickCorrectionSafe(nominalActionPos, candidateTarget))
+            {
+                LogMessage("Grip", string.Format(
+                    "Skipped {0} task={1} robot={2}; fallback unsafe nominal={3} target={4}.",
+                    label,
+                    context.Request.taskId,
+                    context.Request.robotId,
+                    nominalActionPos,
+                    candidateTarget));
+                yield break;
+            }
+
+            yield return MoveArmTo(
+                context,
+                candidateTarget,
+                armMoveDuration,
+                label);
+        }
+
+        private static bool IsRecoverableGripMiss(string reason)
+        {
+            if (string.IsNullOrEmpty(reason))
+            {
+                return false;
+            }
+
+            return reason.IndexOf("ContactProbe", StringComparison.OrdinalIgnoreCase) >= 0
+                || reason.IndexOf("no candidate", StringComparison.OrdinalIgnoreCase) >= 0
+                || reason.IndexOf("timeout", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private static bool IsCandidatePickCorrectionSafe(Vector3 nominalActionPos, Vector3 candidateTarget)
+        {
+            Vector3 delta = candidateTarget - nominalActionPos;
+            float horizontal = new Vector2(delta.x, delta.z).magnitude;
+            return horizontal <= MaxCandidatePickHorizontalCorrection
+                && Mathf.Abs(delta.y) <= MaxCandidatePickVerticalCorrection;
+        }
+
+        private static bool IsFallbackPickCorrectionSafe(Vector3 nominalActionPos, Vector3 candidateTarget)
+        {
+            Vector3 delta = candidateTarget - nominalActionPos;
+            float horizontal = new Vector2(delta.x, delta.z).magnitude;
+            return horizontal <= MaxCandidatePickHorizontalCorrection
+                && delta.y <= 0f
+                && Mathf.Abs(delta.y) <= MaxCandidatePickVerticalCorrection;
         }
 
         private IEnumerator RunClassification(MissionContext context)
@@ -3742,8 +3959,14 @@ namespace CPS.ICPBL.Student
                 color.a);
         }
 
-        private IEnumerator RunPlaceSequence(MissionContext context)
+        private bool ReserveDestinationSlot(MissionContext context)
         {
+            if (context.ReservedSlot != null)
+            {
+                context.SlotReserved = true;
+                return true;
+            }
+
             context.ReservedSlot = dependencies.Palletizer.ReserveNextSlot(
                 context.DestinationBoxType,
                 context.Request.robotId,
@@ -3753,6 +3976,16 @@ namespace CPS.ICPBL.Student
             if (context.ReservedSlot == null)
             {
                 Fail(context, MissionFailureReason.PlaceFailed, "Palletizer returned null slot.");
+                return false;
+            }
+
+            return true;
+        }
+
+        private IEnumerator RunPlaceSequence(MissionContext context)
+        {
+            if (!ReserveDestinationSlot(context))
+            {
                 yield break;
             }
 
@@ -3795,7 +4028,17 @@ namespace CPS.ICPBL.Student
             }
 
             dependencies.Gripper.Release();
-            yield return null;
+            if (PostReleaseVerticalSettleSec > 0f)
+            {
+                yield return new WaitForSeconds(PostReleaseVerticalSettleSec);
+                dependencies.Gripper.FreezeLastReleasedObjectAtProductCenter(
+                    context.ReservedSlot.productCenterPos);
+            }
+            else
+            {
+                yield return null;
+            }
+
             if (dependencies.Gripper.IsHolding)
             {
                 Fail(context, MissionFailureReason.PlaceFailed, "Release completed but gripper still holds the object.");

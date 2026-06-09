@@ -34,7 +34,7 @@ namespace CPS.ICPBL.Student
         [SerializeField, Min(0.1f)] private float gripReadyTimeoutSec =
             StudentConstants.DefaultGripReadyTimeoutSec;
         [SerializeField, Min(0f)] private float gripRetryWaitSec = 0.08f;
-        [SerializeField, Min(0)] private int gripRetryCount = 1;
+        [SerializeField, Min(0)] private int gripRetryCount = 4;
         [SerializeField, Min(0f)] private float colorRetryWaitSec = 0.1f;
         [SerializeField, Min(0)] private int colorRetryCount = 1;
         [SerializeField, Min(0.01f)] private float postPlaceArmRaiseDurationSec =

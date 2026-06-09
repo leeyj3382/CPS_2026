@@ -97,6 +97,7 @@ namespace CPS.ICPBL.Student
         public int slotIndex;
         public Vector3 approachPos;
         public Vector3 placePos;
+        public Vector3 productCenterPos;
         public Vector3 retractPos;
         public bool reserved;
         public int reservedByTaskId = StudentConstants.NoTaskId;

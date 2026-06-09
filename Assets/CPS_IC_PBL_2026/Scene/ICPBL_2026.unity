@@ -7892,7 +7892,7 @@ MonoBehaviour:
   lockTimeoutSec: 5
   gripReadyTimeoutSec: 1
   gripRetryWaitSec: 0.08
-  gripRetryCount: 1
+  gripRetryCount: 4
   colorRetryWaitSec: 0.1
   colorRetryCount: 1
   postPlaceArmRaiseDurationSec: 0.22
@@ -8472,12 +8472,15 @@ MonoBehaviour:
   layerHeight: 0.25
   productSize: 0.25
   sideClearance: 0.06
-  bottomClearance: 0.01
+  bottomClearance: 0
   normalGridOriginOffset: {x: -0.8, y: 0, z: -0.48}
   abnormalGridOriginOffset: {x: -0.8, y: 0, z: -0.48}
+  abnormalBoundsGridOffset: {x: -0.04, y: 0, z: 0}
   fitGridToBoxBounds: 1
   horizontalPadding: 0.2
-  verticalPadding: 0.135
+  normalExtraHorizontalPadding: 0
+  abnormalExtraHorizontalPadding: 0
+  verticalPadding: 0.125
   placeApproachOffset: {x: 0, y: 0.35, z: 0}
   placeRetractOffset: {x: 0, y: 0.45, z: 0}
   drawGizmos: 1
@@ -8501,7 +8504,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   operatingStations: {fileID: 11400000, guid: 667bb907820e74b4f8756d19fbc1c215, type: 2}
   conveyorApproachOffset: {x: 0, y: 0.25, z: 0}
-  conveyorActionOffset: {x: 0, y: -0.35, z: 0}
+  conveyorActionOffset: {x: 0, y: -0.176, z: 0}
   conveyorRetractOffset: {x: 0, y: 0.35, z: 0}
   conveyorArmMoveDuration: 0.22
   boxApproachOffset: {x: 0, y: 0.55, z: 0}
@@ -8786,7 +8789,7 @@ MonoBehaviour:
   lockTimeoutSec: 5
   gripReadyTimeoutSec: 1
   gripRetryWaitSec: 0.08
-  gripRetryCount: 1
+  gripRetryCount: 4
   colorRetryWaitSec: 0.1
   colorRetryCount: 1
   postPlaceArmRaiseDurationSec: 0.22

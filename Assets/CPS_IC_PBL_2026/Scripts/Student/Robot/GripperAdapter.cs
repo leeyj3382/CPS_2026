@@ -6,7 +6,13 @@ namespace CPS.ICPBL.Student
 {
     public sealed class GripperAdapter
     {
+        private const float SuctionFaceOffsetFromAttachPoint = 0f;
+        private const float ReleaseSurfaceProbePadding = 0.45f;
+        private const float ReleaseSurfaceContactOffset = 0.012f;
+
         private readonly SuctionGripper gripper;
+        private readonly RaycastHit[] releaseSurfaceHits = new RaycastHit[16];
+        private PickableObject lastReleasedObject;
 
         public GripperAdapter(SuctionGripper gripper)
         {
@@ -29,6 +35,52 @@ namespace CPS.ICPBL.Student
         }
 
         public string LastFailureReason { get; private set; }
+
+        public void ClearSensorCandidates()
+        {
+            LastFailureReason = string.Empty;
+            if (gripper == null)
+            {
+                return;
+            }
+
+            GripperTriggerSensor[] triggerSensors =
+                gripper.GetComponentsInChildren<GripperTriggerSensor>(true);
+            for (int i = 0; i < triggerSensors.Length; i++)
+            {
+                triggerSensors[i]?.Clear();
+            }
+
+            GripperContactSensor[] contactSensors =
+                gripper.GetComponentsInChildren<GripperContactSensor>(true);
+            for (int i = 0; i < contactSensors.Length; i++)
+            {
+                contactSensors[i]?.Clear();
+            }
+        }
+
+        public bool TryGetCurrentCandidatePickTarget(float contactInset, out Vector3 worldPos)
+        {
+            worldPos = default;
+            if (gripper == null)
+            {
+                return false;
+            }
+
+            PickableObject candidate = gripper.CurrentCandidate;
+            if (candidate == null || !TryGetObjectBounds(candidate, out Bounds objectBounds))
+            {
+                return false;
+            }
+
+            Vector3 topCenter = new Vector3(
+                objectBounds.center.x,
+                objectBounds.max.y - Mathf.Max(0f, contactInset),
+                objectBounds.center.z);
+            Vector3 suctionAxis = gripper.transform.forward.normalized;
+            worldPos = topCenter - (suctionAxis * SuctionFaceOffsetFromAttachPoint);
+            return true;
+        }
 
         private bool smoothAlignmentActive;
         private float smoothAlignmentStartedAt;
@@ -111,6 +163,7 @@ namespace CPS.ICPBL.Student
             }
 
             NormalizeHeldObjectForColorSensor();
+            SnapHeldObjectTopToSuctionFace();
             reason = string.Empty;
             LastFailureReason = string.Empty;
             return true;
@@ -258,9 +311,224 @@ namespace CPS.ICPBL.Student
                 return;
             }
 
+            PickableObject releasedObject = gripper.HeldObject;
             ForceHeldObjectWorldGridAlignment();
             gripper.Release();
+            EnableReleasedObjectVerticalSettlePhysics(releasedObject);
+            lastReleasedObject = releasedObject;
             ClearAlignmentState();
+        }
+
+        public void FreezeLastReleasedObjectAtProductCenter(Vector3 productCenter)
+        {
+            PickableObject releasedObject = lastReleasedObject;
+            if (releasedObject == null)
+            {
+                return;
+            }
+
+            MoveReleasedObjectCenterTo(releasedObject, productCenter);
+            FreezeReleasedObject(releasedObject);
+        }
+
+        public void FreezeLastReleasedObjectOnSurface()
+        {
+            PickableObject releasedObject = lastReleasedObject;
+            if (releasedObject == null)
+            {
+                return;
+            }
+
+            SettleReleasedObjectOntoSurface(releasedObject);
+            FreezeReleasedObject(releasedObject);
+        }
+
+        private static void FreezeReleasedObject(PickableObject releasedObject)
+        {
+            Rigidbody body = releasedObject.TargetRigidbody;
+            if (body == null)
+            {
+                return;
+            }
+
+            body.velocity = Vector3.zero;
+            body.angularVelocity = Vector3.zero;
+            body.useGravity = false;
+            body.isKinematic = true;
+            body.constraints = RigidbodyConstraints.FreezeAll;
+            body.detectCollisions = true;
+        }
+
+        private static void MoveReleasedObjectCenterTo(
+            PickableObject releasedObject,
+            Vector3 productCenter)
+        {
+            if (releasedObject == null)
+            {
+                return;
+            }
+
+            Physics.SyncTransforms();
+            if (!TryGetObjectBounds(releasedObject, out Bounds objectBounds))
+            {
+                return;
+            }
+
+            releasedObject.transform.position += productCenter - objectBounds.center;
+            Physics.SyncTransforms();
+        }
+
+        private void SnapHeldObjectTopToSuctionFace()
+        {
+            if (gripper == null)
+            {
+                return;
+            }
+
+            PickableObject heldObject = gripper.HeldObject;
+            if (heldObject == null)
+            {
+                return;
+            }
+
+            Transform heldTransform = heldObject.transform;
+            Transform attachTransform = heldTransform.parent;
+            if (attachTransform == null || !TryGetObjectBounds(heldObject, out Bounds objectBounds))
+            {
+                return;
+            }
+
+            Vector3 suctionAxis = attachTransform.forward.normalized;
+            Vector3 suctionFace = attachTransform.position
+                + suctionAxis * SuctionFaceOffsetFromAttachPoint;
+            float targetTopProjection = Vector3.Dot(suctionFace, suctionAxis);
+            float currentTopProjection = GetMinimumBoundsProjection(objectBounds, suctionAxis);
+            heldTransform.position += suctionAxis * (targetTopProjection - currentTopProjection);
+            Physics.SyncTransforms();
+            ClearAlignmentState();
+        }
+
+        private void SettleReleasedObjectOntoSurface(PickableObject releasedObject)
+        {
+            if (releasedObject == null || gripper == null)
+            {
+                return;
+            }
+
+            Physics.SyncTransforms();
+            if (!TryGetObjectBounds(releasedObject, out Bounds objectBounds))
+            {
+                return;
+            }
+
+            Vector3 rayOrigin = objectBounds.center
+                + Vector3.up * (objectBounds.extents.y + ReleaseSurfaceProbePadding);
+            float rayDistance = objectBounds.size.y + (ReleaseSurfaceProbePadding * 2f);
+            int hitCount = Physics.RaycastNonAlloc(
+                rayOrigin,
+                Vector3.down,
+                releaseSurfaceHits,
+                rayDistance,
+                ~0,
+                QueryTriggerInteraction.Ignore);
+
+            bool foundSurface = false;
+            RaycastHit nearestSurfaceHit = default;
+            for (int i = 0; i < hitCount; i++)
+            {
+                RaycastHit hit = releaseSurfaceHits[i];
+                if (hit.collider == null
+                    || hit.collider.transform.IsChildOf(releasedObject.transform)
+                    || hit.collider.transform.IsChildOf(gripper.transform))
+                {
+                    continue;
+                }
+
+                if (!foundSurface || hit.distance < nearestSurfaceHit.distance)
+                {
+                    nearestSurfaceHit = hit;
+                    foundSurface = true;
+                }
+            }
+
+            if (!foundSurface)
+            {
+                return;
+            }
+
+            float targetBottomY = nearestSurfaceHit.point.y + ReleaseSurfaceContactOffset;
+            float settleDistance = targetBottomY - objectBounds.min.y;
+            if (Mathf.Abs(settleDistance) <= 0.0001f)
+            {
+                return;
+            }
+
+            releasedObject.transform.position += Vector3.up * settleDistance;
+            Physics.SyncTransforms();
+        }
+
+        private static void EnableReleasedObjectVerticalSettlePhysics(PickableObject releasedObject)
+        {
+            if (releasedObject == null || releasedObject.TargetRigidbody == null)
+            {
+                return;
+            }
+
+            Rigidbody body = releasedObject.TargetRigidbody;
+            body.isKinematic = false;
+            body.useGravity = true;
+            body.detectCollisions = true;
+            body.constraints = RigidbodyConstraints.FreezePositionX
+                | RigidbodyConstraints.FreezePositionZ
+                | RigidbodyConstraints.FreezeRotation;
+            body.velocity = Vector3.zero;
+            body.angularVelocity = Vector3.zero;
+            body.WakeUp();
+        }
+
+        private static bool TryGetObjectBounds(PickableObject pickable, out Bounds bounds)
+        {
+            Collider[] colliders = pickable.GetComponentsInChildren<Collider>();
+            bounds = default;
+            bool hasBounds = false;
+
+            for (int i = 0; i < colliders.Length; i++)
+            {
+                Collider objectCollider = colliders[i];
+                if (objectCollider == null || !objectCollider.enabled)
+                {
+                    continue;
+                }
+
+                if (!hasBounds)
+                {
+                    bounds = objectCollider.bounds;
+                    hasBounds = true;
+                }
+                else
+                {
+                    bounds.Encapsulate(objectCollider.bounds);
+                }
+            }
+
+            return hasBounds;
+        }
+
+        private static float GetMinimumBoundsProjection(Bounds bounds, Vector3 axis)
+        {
+            Vector3 min = bounds.min;
+            Vector3 max = bounds.max;
+            float minimum = float.PositiveInfinity;
+
+            minimum = Mathf.Min(minimum, Vector3.Dot(new Vector3(min.x, min.y, min.z), axis));
+            minimum = Mathf.Min(minimum, Vector3.Dot(new Vector3(min.x, min.y, max.z), axis));
+            minimum = Mathf.Min(minimum, Vector3.Dot(new Vector3(min.x, max.y, min.z), axis));
+            minimum = Mathf.Min(minimum, Vector3.Dot(new Vector3(min.x, max.y, max.z), axis));
+            minimum = Mathf.Min(minimum, Vector3.Dot(new Vector3(max.x, min.y, min.z), axis));
+            minimum = Mathf.Min(minimum, Vector3.Dot(new Vector3(max.x, min.y, max.z), axis));
+            minimum = Mathf.Min(minimum, Vector3.Dot(new Vector3(max.x, max.y, min.z), axis));
+            minimum = Mathf.Min(minimum, Vector3.Dot(new Vector3(max.x, max.y, max.z), axis));
+            return minimum;
         }
     }
 }
